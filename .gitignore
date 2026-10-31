@@ -1,0 +1,41 @@
+# ====================================================
+# Privado: nunca se sube
+# ====================================================
+llm-server/api_key.txt
+.mochi_chrome/
+CLAUDE.md
+Mochi.desktop
+.claude/
+
+# ====================================================
+# Entornos de Python (se reinstalan con requirements.txt)
+# ====================================================
+.venv/
+__pycache__/
+*.pyc
+
+# ====================================================
+# Modelos de voz (Vosk y Piper: se bajan aparte, ver README)
+# ====================================================
+models/
+*.onnx
+*.onnx.json
+
+# ====================================================
+# Lo que se genera al armar el AppImage
+# ====================================================
+mochi-app/build/
+mochi-app/dist/
+*.AppImage
+
+# ====================================================
+# Copias, zips y basura
+# ====================================================
+*.zip
+*.rar
+*.log
+para_pc/
+notebook/
+.pio/
+.DS_Store
+*~

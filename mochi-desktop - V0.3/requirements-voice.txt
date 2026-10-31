@@ -1,0 +1,8 @@
+# Puente de voz ESP32 (voice_bridge/)
+pyserial==3.5
+vosk==0.3.45
+piper-tts==1.8.0
+# Ventana de voz (voice_bridge/mochi_pc): Parlante PC
+numpy>=1.26
+soundcard==0.4.6
+PyAudioWPatch>=0.2.12; sys_platform == "win32"

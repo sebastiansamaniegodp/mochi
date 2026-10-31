@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Instrucciones Mochi 3.5</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --text: #1d2329;
+    --muted: #5b6670;
+    --line: #dde2e7;
+    --accent: #0f7f6f;
+    --accent-soft: #e3f4f1;
+    --code-bg: #eef1f4;
+    --warn-bg: #fff6e0;
+    --warn-line: #e8c46a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12181d;
+      --card: #1a2229;
+      --text: #e6ecef;
+      --muted: #9aa7b1;
+      --line: #2c3740;
+      --accent: #5fd3bf;
+      --accent-soft: #1d332f;
+      --code-bg: #232d35;
+      --warn-bg: #2e2816;
+      --warn-line: #8a7230;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12181d;
+    --card: #1a2229;
+    --text: #e6ecef;
+    --muted: #9aa7b1;
+    --line: #2c3740;
+    --accent: #5fd3bf;
+    --accent-soft: #1d332f;
+    --code-bg: #232d35;
+    --warn-bg: #2e2816;
+    --warn-line: #8a7230;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 820px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.9rem; line-height: 1.2; margin: 0 0 8px; }
+  h2 {
+    font-size: 1.35rem; margin: 40px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid var(--accent);
+  }
+  h3 { font-size: 1.1rem; margin: 28px 0 8px; color: var(--accent); }
+  p, li { max-width: 72ch; }
+  ul, ol { padding-left: 1.4em; }
+  li { margin: 4px 0; }
+  .lead { color: var(--muted); margin-top: 0; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 4px 20px 12px; margin: 16px 0;
+  }
+  .card h3 { margin-top: 18px; }
+  .tag {
+    display: inline-block; font-size: .8rem; font-weight: 600;
+    background: var(--accent-soft); color: var(--accent);
+    border-radius: 999px; padding: 2px 10px; margin-left: 6px; vertical-align: middle;
+  }
+  code {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: .9em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px;
+    word-break: break-word;
+  }
+  pre {
+    background: var(--code-bg); border-radius: 8px; padding: 12px 14px;
+    overflow-x: auto; margin: 10px 0;
+  }
+  pre code { background: none; padding: 0; word-break: normal; }
+  .table-wrap { overflow-x: auto; margin: 10px 0; }
+  table { border-collapse: collapse; width: 100%; min-width: 420px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); font-weight: 600; }
+  .note {
+    background: var(--warn-bg); border-left: 4px solid var(--warn-line);
+    border-radius: 6px; padding: 10px 14px; margin: 14px 0;
+  }
+  a { color: var(--accent); }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 32px 0; }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Mochi 3.5: cómo subir el firmware y usarlo</h1>
+<p class="lead">Un solo firmware para todo. El cableado es el del Mochi limpio: no hay que cambiar nada de la placa.</p>
+<div class="note"><strong>Todo está en una sola carpeta: <code>~/Escritorio/ROBOTICA</code>.</strong> El firmware está en <code>ROBOTICA/firmware/Mochi/</code> y el lanzador de Mochi en <code>ROBOTICA/</code>.</div>
+
+<ul>
+  <li><strong>La carita de siempre</strong> (Mochi limpio v3.3.8): ojos animados, parpadeo, guiño, mirar alrededor, bostezo, dormir, reacción al sonido.</li>
+  <li><strong>Las órdenes programadas por voz:</strong> "Mochi, feliz", "Mochi, duerme", "Mochi, sorpresa", "Mochi, guiño", "Mochi, graba", "Mochi, reproduce", etc.</li>
+  <li><strong>Parlante PC:</strong> la música o los videos de la PC suenan por el parlante de Mochi.</li>
+  <li><strong>El LLM:</strong> le hablás o le escribís a Mochi desde la ventana. La cara reacciona: curiosa cuando escucha y piensa, feliz con la boca moviéndose cuando habla, sorprendida si hay un error. La respuesta aparece abajo de la cara.</li>
+</ul>
+
+<h2>Parte 1: subir el firmware a la placa</h2>
+<p>Hay dos maneras. Las dos dejan el mismo firmware en la placa.</p>
+
+<div class="card">
+<h3>Manera A: con el Arduino IDE</h3>
+<p>Sirve si querés ver o cambiar el código.</p>
+
+<p><strong>Una sola vez por computadora</strong> (si el IDE ya compila para ESP32-S3, saltear):</p>
+<ol>
+  <li><em>Archivo → Preferencias → Gestor de URLs adicionales de tarjetas:</em> agregar<br>
+    <code>https://espressif.github.io/arduino-esp32/package_esp32_index.json</code></li>
+  <li><em>Herramientas → Placa → Gestor de tarjetas:</em> buscar <strong>esp32</strong> (de Espressif Systems) e instalar la versión <strong>3.3.12</strong>.<br>
+    Ocupa ~2 GB y la primera vez tarda (depende de internet). Si no hay tiempo, usar la <strong>manera B</strong>: no necesita nada de esto.</li>
+  <li><em>Herramientas → Administrar bibliotecas:</em> instalar <strong>Adafruit GFX Library</strong>, <strong>Adafruit ST7735 and ST7789 Library</strong> y <strong>Adafruit BusIO</strong>.</li>
+</ol>
+
+<p><strong>Cada vez:</strong></p>
+<ol>
+  <li>Abrir <code>ROBOTICA/firmware/Mochi/Mochi.ino</code> (<em>Archivo → Abrir</em>; los <code>.h</code> se abren solos en pestañas).</li>
+  <li>En <em>Herramientas</em>:
+    <div class="table-wrap">
+    <table>
+      <tr><th>Opción</th><th>Valor</th></tr>
+      <tr><td>Placa</td><td><strong>ESP32S3 Dev Module</strong></td></tr>
+      <tr><td>USB CDC On Boot</td><td><strong>Enabled</strong></td></tr>
+      <tr><td>USB Mode</td><td><strong>Hardware CDC and JTAG</strong></td></tr>
+      <tr><td>Upload Mode</td><td><strong>UART0 / Hardware CDC</strong></td></tr>
+      <tr><td>PSRAM</td><td><strong>QSPI PSRAM</strong></td></tr>
+      <tr><td>Puerto</td><td>el del ESP32 (<code>/dev/ttyACM0</code> en Linux, <code>COMx</code> en Windows)</td></tr>
+    </table>
+    </div>
+  </li>
+  <li>Conectar el ESP32 por el USB <strong>nativo</strong> (el que dice USB/OTG, no UART).</li>
+  <li>Cerrar el Monitor Serie y la ventana de Mochi si están abiertos (ocupan el puerto).</li>
+  <li><strong>Subir</strong> (flecha →). Compilar tarda ~1 minuto.</li>
+  <li>Al terminar, apretar <strong>RESET</strong> una vez (sin BOOT).</li>
+</ol>
+
+<div class="note">Si cambiás el código: antes de pasarlo al equipo, <em>Sketch → Exportar binario compilado</em> y copiar <code>Mochi.ino.merged.bin</code> a <code>binarios/</code>. Así nadie tiene que compilar.</div>
+</div>
+
+<div class="card">
+<h3>Manera B: sin compilar <span class="tag">30 segundos, no instala nada</span></h3>
+<p>El firmware ya está compilado en <code>binarios/Mochi.ino.merged.bin</code>.</p>
+
+<p><strong>En cualquier computadora (Windows, Linux, Mac), con Chrome o Edge:</strong></p>
+<ol>
+  <li>Conectar el ESP32 por el USB nativo. Cerrar el Arduino IDE o la ventana de Mochi si están abiertos.</li>
+  <li>Abrir <a href="https://espressif.github.io/esptool-js/">https://espressif.github.io/esptool-js/</a></li>
+  <li>Baudrate <strong>921600</strong> → <strong>Connect</strong> → elegir el puerto del ESP32.<br>
+    Si no aparece: mantener BOOT, apretar RESET, soltar BOOT y reintentar.</li>
+  <li><em>Flash Address</em> <strong>0x0</strong> y elegir el archivo <code>binarios/Mochi.ino.merged.bin</code>.</li>
+  <li><strong>Program</strong>. Cuando termine, apretar <strong>RESET</strong> una vez.</li>
+</ol>
+
+<p><strong>En la notebook Linux, con un comando:</strong></p>
+<pre><code>bash ~/Escritorio/ROBOTICA/firmware/Mochi/binarios/subir_firmware.sh</code></pre>
+</div>
+
+<h2>Parte 2: usar a Mochi desde la PC</h2>
+
+<div class="card">
+<h3>Con el LLM <span class="tag">todo desde la ventana</span></h3>
+<ol>
+  <li>En la PC del LLM, prender <code>llm-server/start.sh</code> (si no, Mochi responde con error). En esa PC no hay que instalar ni cambiar nada más.</li>
+  <li>En la notebook, abrir la carpeta <code>ROBOTICA</code> del Escritorio y doble clic en <strong>«Mochi (voz + LLM)»</strong>.<br>
+    Otra forma: doble clic en <code>mochi-desktop - V0.3/Iniciar_Mochi_LLM.sh</code>, o en una terminal:
+    <pre><code>cd ~/Escritorio/ROBOTICA/"mochi-desktop - V0.3" &amp;&amp; ../.venv/bin/python -m voice_bridge.esp32_bridge</code></pre>
+    En Windows, desde la carpeta <code>mochi-desktop - V0.3</code>: <code>python -m voice_bridge.esp32_bridge</code></li>
+  <li>Se abre la ventana de Mochi y se conecta sola al ESP32.</li>
+  <li>Para hablarle al LLM:
+    <ul>
+      <li>Clic en <strong>🎤 Hablarle a Mochi</strong>, hablar, y se envía solo cuando dejás de hablar.</li>
+      <li>O escribir en el cuadro y <strong>Enviar texto</strong> (o Enter).</li>
+      <li>Opcional: mantener apretado <strong>BOOT</strong> en la placa mientras hablás.</li>
+    </ul>
+  </li>
+  <li>Las órdenes programadas ("Mochi, duerme"...) siguen funcionando en la misma ventana.</li>
+</ol>
+<p>Para probar sin el LLM: <code>bash Iniciar_Mochi_LLM.sh --echo</code> (Mochi repite lo que oyó).</p>
+</div>
+
+<div class="card">
+<h3>Parlante PC (que la PC suene por Mochi)</h3>
+<p>Solo en Linux: al abrir la ventana aparece una salida de audio nueva llamada <strong>«Mochi»</strong>.</p>
+<ol>
+  <li>En la ventana, <em>Audio que sale de la PC:</em> ya viene elegida <strong>Mochi</strong>. Clic en <strong>Activar parlante PC</strong>.</li>
+  <li>En el icono de volumen de KDE, elegir <strong>Mochi</strong> como salida (o solo para una app, en el mezclador).
+    Lo que suena ahí sale por el parlante de Mochi y no por la notebook.</li>
+  <li>Para volver: elegir otra vez los parlantes de la notebook en el icono de volumen.</li>
+</ol>
+<p>Mientras Mochi te escucha o responde, la música se pausa sola y después sigue. Al cerrar la ventana, la salida «Mochi» desaparece.</p>
+</div>
+
+<div class="card">
+<h3>Solo la ventana de prueba (sin LLM)</h3>
+<p>Sirve igual que antes el <code>Mochi_PC</code> del Mochi limpio (<code>Mochi_v3_3_8_Audio_Limpio_Linux/Mochi_PC/Iniciar_Mochi.sh</code>). Este firmware es compatible.</p>
+</div>
+
+<h2>Si algo falla</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>Pasa</th><th>Probar</th></tr>
+  <tr><td>No aparece el puerto</td><td>Cable de datos (no solo carga), USB nativo; mantener BOOT + RESET para entrar en modo descarga</td></tr>
+  <tr><td>"Puerto ocupado"</td><td>Cerrar Monitor Serie, Arduino IDE, la ventana de Mochi o el flasheador web</td></tr>
+  <tr><td>La ventana dice "Firmware sin modo LLM"</td><td>La placa tiene el Mochi limpio viejo: subir este firmware (parte 1)</td></tr>
+  <tr><td>La cara no arranca después de subir</td><td>Apretar RESET una vez (sin BOOT)</td></tr>
+  <tr><td>El LLM no contesta</td><td>Prender <code>llm-server/start.sh</code> en la PC del LLM; la primera orden puede tardar</td></tr>
+  <tr><td>"No escuché nada"</td><td>Hablar más cerca del micrófono (INMP441)</td></tr>
+</table>
+</div>
+
+</main>
+</body>
+</html>

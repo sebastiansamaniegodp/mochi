@@ -1,0 +1,12 @@
+# ESP32-S3 por USB nativo (Espressif, VID 303a): en modo normal y en
+# modo descarga. Le da acceso al usuario con sesión iniciada (sin sudo
+# ni grupo dialout) y evita que ModemManager le mande comandos AT.
+#
+# Instalar:
+#   sudo cp 99-mochi-esp32.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+# y reconectar el ESP32.
+
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="303a", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="303a", MODE="0660", TAG+="uaccess"

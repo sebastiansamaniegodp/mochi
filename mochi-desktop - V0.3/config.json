@@ -1,0 +1,49 @@
+{
+  "default_profile": "personal",
+
+  "profiles": {
+    "personal": {
+      "directory": "Default"
+    },
+
+    "trabajo": {
+      "directory": "Profile 1"
+    },
+
+    "entretenimiento": {
+      "directory": "Profile 2"
+    }
+  },
+
+  "services": {
+    "youtube": {
+      "profile": "personal",
+      "url": "https://www.youtube.com"
+    },
+
+    "outlook": {
+      "profile": "trabajo",
+      "url": "https://outlook.office.com"
+    },
+
+    "whatsapp": {
+      "profile": "trabajo",
+      "url": "https://web.whatsapp.com"
+    },
+
+    "sheets": {
+      "profile": "trabajo",
+      "url": "https://sheets.google.com"
+    },
+
+    "netflix": {
+      "profile": "entretenimiento",
+      "url": "https://www.netflix.com"
+    },
+
+    "twitch": {
+      "profile": "entretenimiento",
+      "url": "https://www.twitch.tv"
+    }
+  }
+}

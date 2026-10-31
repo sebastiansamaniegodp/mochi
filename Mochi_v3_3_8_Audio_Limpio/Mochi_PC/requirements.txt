@@ -1,0 +1,5 @@
+vosk==0.3.45
+pyserial==3.5
+numpy>=1.26
+soundcard>=0.4
+PyAudioWPatch>=0.2.12

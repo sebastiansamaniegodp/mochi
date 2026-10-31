@@ -1,0 +1,20 @@
+# Mochi (Linux). Se instala en el AppImage y en .venv/ para correr desde el código.
+
+# Interfaz. Misma versión que el Qt de KDE en Debian 13 (6.8.2): así se usan
+# el estilo Breeze y el tema de Plasma del sistema (ver src/mochi_app/kde.py).
+PySide6-Essentials==6.8.2.1
+
+# Placa (USB) y voz
+pyserial==3.5
+vosk==0.3.45
+piper-tts==1.8.0
+numpy==2.5.3
+soundcard==0.4.6
+
+# Agente de Mochi Desktop (ventanas por KWin, D-Bus, YouTube)
+psutil==7.2.2
+jeepney==0.9.0
+yt-dlp==2026.8.19
+
+# Opcional: Whisper como alternativa a Vosk (--stt whisper). Agrega ~250 MB.
+# faster-whisper==1.2.1

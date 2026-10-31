@@ -1,0 +1,31 @@
+SUBIR EL FIRMWARE DE MOCHI SIN COMPILAR NI INSTALAR NADA
+
+Esta carpeta tiene el firmware YA COMPILADO. No hace falta el Arduino IDE,
+ni el paquete esp32, ni PlatformIO. Se sube en unos 30 segundos.
+
+Archivo a subir: Mochi_Audio_Prueba.ino.merged.bin  (direccion 0x0)
+
+------------------------------------------------------------------
+OPCION A - Cualquier PC (Windows, Linux, Mac), sin instalar nada
+------------------------------------------------------------------
+1. Conectar el ESP32 por el USB nativo (el que dice USB/OTG).
+   Cerrar Arduino IDE / Monitor Serie / Mochi_PC si estan abiertos.
+2. Abrir en Chrome o Edge:  https://espressif.github.io/esptool-js/
+3. Baudrate 921600 -> "Connect" -> elegir el puerto del ESP32.
+   (Si no aparece: mantener BOOT, apretar RESET, soltar BOOT y reintentar.)
+4. En "Flash Address" poner 0x0 y elegir Mochi_Audio_Prueba.ino.merged.bin
+5. "Program". Esperar a que termine (unos 30 s).
+6. Apretar RESET una vez (sin BOOT).
+
+------------------------------------------------------------------
+OPCION B - Linux (notebook), un comando
+------------------------------------------------------------------
+    bash subir_firmware.sh            (puerto por defecto /dev/ttyACM0)
+    bash subir_firmware.sh /dev/ttyACM1
+
+------------------------------------------------------------------
+Si se cambia el codigo (.ino)
+------------------------------------------------------------------
+Hay que regenerar estos .bin ANTES de pasarlo al equipo
+(Arduino IDE: Sketch > Exportar binario compilado, con las opciones que
+figuran al principio de subir_firmware.sh). Nunca pasar solo el codigo.

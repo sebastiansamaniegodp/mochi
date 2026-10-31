@@ -1,0 +1,25 @@
+MOCHI v3.3.8 EN LINUX
+
+El programa de PC (Mochi_PC) funciona igual en Windows y en Linux.
+El firmware (Mochi_Audio_Prueba) no cambia.
+
+REQUISITOS (Debian/Ubuntu)
+  sudo apt install python3 python3-venv python3-tk
+  PipeWire o PulseAudio activos (vienen con KDE/GNOME).
+  Permiso para el puerto serie: estar en el grupo dialout
+  (sudo usermod -aG dialout $USER, y volver a iniciar sesion)
+  o tener la regla udev de linux/99-mochi-esp32.rules.
+
+INICIAR
+  bash Mochi_PC/Iniciar_Mochi.sh
+  La primera vez crea Mochi_PC/.venv e instala Vosk, pySerial,
+  numpy y SoundCard (requiere Internet).
+
+DIFERENCIAS CON WINDOWS
+- El puerto aparece como /dev/ttyACM0 (no COM12).
+- "Parlante PC" captura la salida elegida a traves de su monitor de
+  PipeWire/PulseAudio (no WASAPI). Elegi la salida por la que
+  realmente suena el audio.
+- El modelo de Vosk se guarda en ~/.cache/MochiVoz/modelos.
+- Si ModemManager esta activo, puede ocupar el puerto del ESP32 los
+  primeros segundos: la regla udev lo evita.

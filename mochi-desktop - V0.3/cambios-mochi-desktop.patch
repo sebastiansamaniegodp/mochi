@@ -1,0 +1,4312 @@
+diff --git a/mochi-desktop - V0.3/actions/apps.py b/mochi-desktop - V0.3/actions/apps.py
+index 0f99d4b..ec9d417 100644
+--- a/mochi-desktop - V0.3/actions/apps.py	
++++ b/mochi-desktop - V0.3/actions/apps.py	
+@@ -2,6 +2,7 @@ import os
+ import subprocess
+ 
+ from config_manager import get_config
++from linux_platform import system_open
+ 
+ 
+ def get_chrome_path():
+@@ -156,7 +157,7 @@ def open_spotify():
+ 
+     try:
+ 
+-        os.startfile(
++        system_open(
+             "spotify:"
+         )
+ 
+diff --git a/mochi-desktop - V0.3/application_registry.py b/mochi-desktop - V0.3/application_registry.py
+index 681a41e..c2b76de 100644
+--- a/mochi-desktop - V0.3/application_registry.py	
++++ b/mochi-desktop - V0.3/application_registry.py	
+@@ -9,6 +9,8 @@ from discovery.applications import (
+     discover_applications,
+     normalize_name
+ )
++from linux_platform import system_open
++from linux_platform.applications import launch_desktop_entry
+ from mochi_environment import environment
+ 
+ 
+@@ -58,6 +60,7 @@ class ApplicationRegistry:
+ 
+         unique = {}
+         priority = {
++            "desktop_entry": 3,
+             "shortcut": 3,
+             "executable": 2,
+             "start_app": 1,
+@@ -287,7 +290,14 @@ class ApplicationRegistry:
+ 
+             if app["type"] == "shortcut":
+ 
+-                os.startfile(
++                system_open(
++                    app["target"]
++                )
++
++
++            elif app["type"] == "desktop_entry":
++
++                launch_desktop_entry(
+                     app["target"]
+                 )
+ 
+diff --git a/mochi-desktop - V0.3/brain/agent_loop.py b/mochi-desktop - V0.3/brain/agent_loop.py
+index 9e77aeb..e5e6f20 100644
+--- a/mochi-desktop - V0.3/brain/agent_loop.py	
++++ b/mochi-desktop - V0.3/brain/agent_loop.py	
+@@ -3610,9 +3610,19 @@ class MochiAgentLoop:
+         user_command,
+         registry,
+         mode="auto",
+-        verbose=False
++        verbose=False,
++        reply_hint=None
+     ):
+ 
++        # reply_hint: indicación sobre la respuesta final (por ejemplo,
++        # para leerla en voz alta). Va al final del mensaje del usuario
++        # y no en el prompt de sistema, para no romper la caché del LLM.
++        user_content = (
++            f"{user_command}\n\n({reply_hint})"
++            if reply_hint
++            else user_command
++        )
++
+         messages = [
+ 
+             {
+@@ -3628,7 +3638,7 @@ class MochiAgentLoop:
+                     "user",
+ 
+                 "content":
+-                    user_command
++                    user_content
+             }
+         ]
+ 
+diff --git a/mochi-desktop - V0.3/brain/brain_factory.py b/mochi-desktop - V0.3/brain/brain_factory.py
+index 7612582..2c821ab 100644
+--- a/mochi-desktop - V0.3/brain/brain_factory.py	
++++ b/mochi-desktop - V0.3/brain/brain_factory.py	
+@@ -6,6 +6,10 @@ from brain.ollama_provider import (
+     OllamaProvider
+ )
+ 
++from brain.llama_cpp_provider import (
++    LlamaCppProvider
++)
++
+ 
+ # =========================================================
+ # CREAR EL BRAIN SEGÚN LA CONFIGURACIÓN DE ESTA PC
+@@ -87,12 +91,48 @@ def create_brain_provider():
+         return provider
+ 
+ 
++    # =====================================================
++    # LLAMA.CPP (llama-server en la PC con la RX 580)
++    # =====================================================
++
++    if runtime == "llama_cpp":
++
++        provider = (
++            LlamaCppProvider(
++
++                model_name=model,
++
++                base_url=(
++                    brain_config.get(
++                        "base_url"
++                    )
++                    or "http://localhost:8080"
++                ),
++
++                allow_thinking=(
++                    brain_config.get(
++                        "thinking_enabled",
++                        False
++                    )
++                ),
++
++                api_key=(
++                    brain_config.get(
++                        "api_key"
++                    )
++                )
++            )
++        )
++
++
++        return provider
++
++
+     # =====================================================
+     # FUTUROS RUNTIMES
+     #
+     # Después podremos agregar:
+     #
+-    # llama_cpp
+     # embedded
+     # etc.
+     # =====================================================
+diff --git a/mochi-desktop - V0.3/brain/brain_router.py b/mochi-desktop - V0.3/brain/brain_router.py
+index 7f4d9b8..c419f30 100644
+--- a/mochi-desktop - V0.3/brain/brain_router.py	
++++ b/mochi-desktop - V0.3/brain/brain_router.py	
+@@ -226,6 +226,25 @@ class BrainRouter:
+         )
+ 
+ 
++        # Providers con caché de prompt (llama_cpp sin razonamiento):
++        # se manda la misma lista de tools que en FAST, con la tool
++        # de routing al final. Cambiar la lista invalida la caché.
++        if getattr(
++            self.provider,
++            "prefers_stable_tools",
++            False
++        ):
++
++            return self._deep_with_stable_tools(
++
++                messages=messages,
++
++                tools=tools,
++
++                options=final_options
++            )
++
++
+         return self.provider.generate(
+ 
+             messages=messages,
+@@ -236,6 +255,59 @@ class BrainRouter:
+         )
+ 
+ 
++    def _deep_with_stable_tools(
++        self,
++        messages,
++        tools,
++        options
++    ):
++
++        routing_tools = list(
++            tools
++            or []
++        )
++
++        if not any(
++            (tool.get("function") or {}).get("name")
++            == "request_deep_reasoning"
++            for tool in routing_tools
++            if isinstance(tool, dict)
++        ):
++
++            routing_tools.append(
++                self._deep_request_tool()
++            )
++
++
++        result = self.provider.generate(
++
++            messages=messages,
++
++            tools=routing_tools,
++
++            options=options
++        )
++
++
++        # Ya estamos en DEEP: si el modelo vuelve a pedirlo,
++        # se descarta esa llamada (no es una tool real).
++        if result.success and result.tool_calls:
++
++            result.tool_calls = [
++
++                call
++
++                for call in result.tool_calls
++
++                if not self._requested_deep(
++                    [call]
++                )
++            ]
++
++
++        return result
++
++
+     # =====================================================
+     # MODO AUTOMÁTICO
+     # =====================================================
+diff --git a/mochi-desktop - V0.3/brain/llama_cpp_provider.py b/mochi-desktop - V0.3/brain/llama_cpp_provider.py
+new file mode 100644
+index 0000000..7cc4155
+--- /dev/null
++++ b/mochi-desktop - V0.3/brain/llama_cpp_provider.py	
+@@ -0,0 +1,928 @@
++import json
++import urllib.error
++import urllib.request
++
++from brain.brain_provider import (
++    BrainProvider,
++    BrainCapabilities,
++    BrainResult
++)
++
++
++# =========================================================
++# LLAMA.CPP PROVIDER
++#
++# Habla con llama-server (llama.cpp) mediante su API
++# compatible con OpenAI: /v1/chat/completions.
++#
++# El servidor corre en la PC con la RX 580 (Vulkan) y
++# se arranca con --jinja para que las tools usen la
++# plantilla de chat del modelo.
++#
++# El resto de Mochi habla "formato Ollama", así que este
++# provider traduce en ambos sentidos:
++#
++# - opciones: think / num_predict / num_ctx
++# - mensajes: tool_calls con arguments en dict,
++#   mensajes "tool" con tool_name
++# =========================================================
++
++class LlamaCppProvider(
++    BrainProvider
++):
++
++    def __init__(
++        self,
++        model_name=None,
++        base_url="http://localhost:8080",
++        allow_thinking=False,
++        api_key=None
++    ):
++
++        super().__init__(
++            model_name=model_name
++        )
++
++        self.base_url = (
++            base_url.rstrip("/")
++        )
++
++        # Mochi usa el modelo SIN razonamiento.
++        #
++        # Aunque BrainRouter pida think=True en
++        # modo deep, acá se fuerza a False salvo
++        # que la configuración lo permita.
++        self.allow_thinking = bool(
++            allow_thinking
++        )
++
++        self.api_key = (
++            api_key
++        )
++
++        # llama-server reutiliza la caché del prompt solo si el
++        # comienzo es idéntico. Sin razonamiento, "deep" no aporta
++        # nada: BrainRouter mantiene la misma lista de tools que en
++        # "fast" para no invalidar la caché (~80 s en la RX 580).
++        self.prefers_stable_tools = (
++            not self.allow_thinking
++        )
++
++
++    # =====================================================
++    # NOMBRE DEL PROVIDER
++    # =====================================================
++
++    @property
++    def provider_name(
++        self
++    ):
++
++        return "llama_cpp"
++
++
++    # =====================================================
++    # CAPACIDADES
++    # =====================================================
++
++    @property
++    def capabilities(
++        self
++    ):
++
++        return BrainCapabilities(
++
++            tools=True,
++
++            vision=False,
++
++            streaming=False,
++
++            conversations=True
++        )
++
++
++    # =====================================================
++    # REQUEST HTTP
++    # =====================================================
++
++    def _request(
++        self,
++        method,
++        endpoint,
++        payload=None,
++        timeout=30
++    ):
++
++        url = (
++            self.base_url
++            + endpoint
++        )
++
++
++        data = None
++
++
++        if payload is not None:
++
++            data = json.dumps(
++                payload
++            ).encode(
++                "utf-8"
++            )
++
++
++        headers = {
++            "Content-Type":
++                "application/json"
++        }
++
++
++        if self.api_key:
++
++            headers[
++                "Authorization"
++            ] = f"Bearer {self.api_key}"
++
++
++        request = urllib.request.Request(
++
++            url=url,
++
++            data=data,
++
++            method=method,
++
++            headers=headers
++        )
++
++
++        try:
++
++            with urllib.request.urlopen(
++                request,
++                timeout=timeout
++            ) as response:
++
++                body = (
++                    response
++                    .read()
++                    .decode(
++                        "utf-8"
++                    )
++                )
++
++
++                if not body:
++
++                    return {}
++
++
++                return json.loads(
++                    body
++                )
++
++
++        except urllib.error.HTTPError as e:
++
++            detail = ""
++
++            try:
++
++                detail = (
++                    e.read()
++                    .decode(
++                        "utf-8",
++                        "replace"
++                    )
++                )
++
++            except Exception:
++
++                pass
++
++
++            raise RuntimeError(
++                f"llama-server respondió {e.code}: {detail[:500]}"
++            )
++
++
++        except urllib.error.URLError as e:
++
++            raise RuntimeError(
++                f"No pude conectar con llama-server en {self.base_url}: {e}"
++            )
++
++
++        except Exception as e:
++
++            raise RuntimeError(
++                f"Error comunicando con llama-server: {e}"
++            )
++
++
++    # =====================================================
++    # COMPROBAR DISPONIBILIDAD
++    #
++    # /health devuelve 503 mientras carga el modelo.
++    # =====================================================
++
++    def is_available(
++        self
++    ):
++
++        try:
++
++            response = (
++                self._request(
++                    method="GET",
++                    endpoint="/health",
++                    timeout=3
++                )
++            )
++
++            return (
++                response.get(
++                    "status"
++                )
++                == "ok"
++            )
++
++
++        except Exception:
++
++            return False
++
++
++    # =====================================================
++    # LISTAR MODELOS
++    #
++    # llama-server sirve un único modelo, el que se
++    # le pasó con -m / --alias.
++    # =====================================================
++
++    def list_models(
++        self
++    ):
++
++        try:
++
++            response = (
++                self._request(
++                    method="GET",
++                    endpoint="/v1/models",
++                    timeout=5
++                )
++            )
++
++
++            return [
++
++                {
++                    "name":
++                        model.get(
++                            "id"
++                        ),
++
++                    "model":
++                        model.get(
++                            "id"
++                        )
++                }
++
++                for model in (
++                    response.get(
++                        "data",
++                        []
++                    )
++                    or []
++                )
++            ]
++
++
++        except Exception:
++
++            return []
++
++
++    def model_exists(
++        self
++    ):
++
++        # El nombre configurado es solo informativo:
++        # llama-server responde con el modelo que tenga
++        # cargado, se llame como se llame.
++        return bool(
++            self.list_models()
++        )
++
++
++    # =====================================================
++    # CARGAR / DESCARGAR
++    #
++    # llama-server carga el modelo al arrancar y lo
++    # mantiene en VRAM. Se administra desde la PC
++    # (systemd), no desde Mochi.
++    # =====================================================
++
++    def load(
++        self
++    ):
++
++        self.loaded = (
++            self.is_available()
++        )
++
++        return self.loaded
++
++
++    def unload(
++        self
++    ):
++
++        return False
++
++
++    # =====================================================
++    # MENSAJES: FORMATO OLLAMA -> OPENAI
++    # =====================================================
++
++    def _to_openai_messages(
++        self,
++        messages
++    ):
++
++        converted = []
++
++        pending_ids = []
++
++        call_counter = 0
++
++
++        for message in (
++            messages
++            or []
++        ):
++
++            if not isinstance(
++                message,
++                dict
++            ):
++
++                continue
++
++
++            role = (
++                message.get(
++                    "role"
++                )
++            )
++
++
++            # =============================================
++            # ASSISTANT CON TOOL CALLS
++            # =============================================
++
++            if (
++                role == "assistant"
++                and message.get(
++                    "tool_calls"
++                )
++            ):
++
++                tool_calls = []
++
++                pending_ids = []
++
++
++                for call in message[
++                    "tool_calls"
++                ]:
++
++                    function = (
++                        call.get(
++                            "function",
++                            {}
++                        )
++                        or {}
++                    )
++
++
++                    arguments = (
++                        function.get(
++                            "arguments",
++                            {}
++                        )
++                    )
++
++
++                    if not isinstance(
++                        arguments,
++                        str
++                    ):
++
++                        arguments = json.dumps(
++                            arguments or {},
++                            ensure_ascii=False
++                        )
++
++
++                    call_counter += 1
++
++                    call_id = (
++                        call.get(
++                            "id"
++                        )
++                        or f"call_{call_counter}"
++                    )
++
++
++                    pending_ids.append(
++                        call_id
++                    )
++
++
++                    tool_calls.append({
++
++                        "id":
++                            call_id,
++
++                        "type":
++                            "function",
++
++                        "function": {
++
++                            "name":
++                                function.get(
++                                    "name"
++                                ),
++
++                            "arguments":
++                                arguments
++                        }
++                    })
++
++
++                converted.append({
++
++                    "role":
++                        "assistant",
++
++                    "content":
++                        message.get(
++                            "content"
++                        )
++                        or "",
++
++                    "tool_calls":
++                        tool_calls
++                })
++
++                continue
++
++
++            # =============================================
++            # RESULTADO DE UNA TOOL
++            # =============================================
++
++            if role == "tool":
++
++                tool_message = {
++
++                    "role":
++                        "tool",
++
++                    "content":
++                        str(
++                            message.get(
++                                "content"
++                            )
++                            or ""
++                        )
++                }
++
++
++                call_id = (
++                    message.get(
++                        "tool_call_id"
++                    )
++                    or (
++                        pending_ids.pop(0)
++                        if pending_ids
++                        else None
++                    )
++                )
++
++
++                if call_id:
++
++                    tool_message[
++                        "tool_call_id"
++                    ] = call_id
++
++
++                if message.get(
++                    "tool_name"
++                ):
++
++                    tool_message[
++                        "name"
++                    ] = message[
++                        "tool_name"
++                    ]
++
++
++                converted.append(
++                    tool_message
++                )
++
++                continue
++
++
++            converted.append({
++
++                "role":
++                    role,
++
++                "content":
++                    message.get(
++                        "content"
++                    )
++                    or ""
++            })
++
++
++        return converted
++
++
++    # =====================================================
++    # TOOL CALLS: FORMATO OPENAI -> OLLAMA
++    # =====================================================
++
++    def _to_ollama_tool_calls(
++        self,
++        tool_calls
++    ):
++
++        converted = []
++
++
++        for call in (
++            tool_calls
++            or []
++        ):
++
++            function = (
++                call.get(
++                    "function",
++                    {}
++                )
++                or {}
++            )
++
++
++            arguments = (
++                function.get(
++                    "arguments",
++                    {}
++                )
++            )
++
++
++            if isinstance(
++                arguments,
++                str
++            ):
++
++                try:
++
++                    arguments = json.loads(
++                        arguments
++                    ) if arguments.strip() else {}
++
++                except Exception:
++
++                    # Se deja como texto: extract_tool_call
++                    # ya sabe manejar ese caso.
++                    pass
++
++
++            converted.append({
++
++                "id":
++                    call.get(
++                        "id"
++                    ),
++
++                "function": {
++
++                    "name":
++                        function.get(
++                            "name"
++                        ),
++
++                    "arguments":
++                        arguments
++                }
++            })
++
++
++        return converted
++
++
++    # =====================================================
++    # LIMPIAR CONTENIDO DEL MODELO
++    # =====================================================
++
++    def _clean_model_content(
++        self,
++        content
++    ):
++
++        if not content:
++
++            return ""
++
++
++        content = str(
++            content
++        )
++
++
++        if "</think>" in content:
++
++            content = (
++                content
++                .split(
++                    "</think>",
++                    1
++                )[1]
++            )
++
++
++        return (
++            content
++            .strip()
++        )
++
++
++    # =====================================================
++    # GENERAR RESPUESTA
++    # =====================================================
++
++    def generate(
++        self,
++        messages,
++        tools=None,
++        options=None
++    ):
++
++        request_options = dict(
++            options or {}
++        )
++
++
++        # =================================================
++        # THINKING
++        #
++        # Qwen3.5 lo controla con la variable de la
++        # plantilla "enable_thinking".
++        # =================================================
++
++        think = (
++            request_options.pop(
++                "think",
++                None
++            )
++        )
++
++
++        enable_thinking = (
++            bool(think)
++            and self.allow_thinking
++        )
++
++
++        payload = {
++
++            "messages":
++                self._to_openai_messages(
++                    messages
++                ),
++
++            "stream":
++                False,
++
++            "chat_template_kwargs": {
++                "enable_thinking":
++                    enable_thinking
++            }
++        }
++
++
++        if self.model_name:
++
++            payload[
++                "model"
++            ] = self.model_name
++
++
++        if tools:
++
++            payload[
++                "tools"
++            ] = tools
++
++
++        # =================================================
++        # OPCIONES (nombres Ollama -> OpenAI)
++        #
++        # num_ctx se fija al arrancar llama-server
++        # (-c), así que se ignora.
++        # =================================================
++
++        renamed = {
++            "num_predict":
++                "max_tokens",
++        }
++
++        ignored = {
++            "num_ctx",
++            "keep_alive",
++        }
++
++
++        for key, value in (
++            request_options.items()
++        ):
++
++            if key in ignored:
++
++                continue
++
++
++            payload[
++                renamed.get(
++                    key,
++                    key
++                )
++            ] = value
++
++
++        try:
++
++            response = (
++                self._request(
++
++                    method="POST",
++
++                    endpoint="/v1/chat/completions",
++
++                    payload=payload,
++
++                    timeout=180
++                )
++            )
++
++
++            choices = (
++                response.get(
++                    "choices"
++                )
++                or [{}]
++            )
++
++
++            message = (
++                choices[0].get(
++                    "message",
++                    {}
++                )
++                or {}
++            )
++
++
++            content = (
++                self._clean_model_content(
++                    message.get(
++                        "content",
++                        ""
++                    )
++                )
++            )
++
++
++            tool_calls = (
++                self._to_ollama_tool_calls(
++                    message.get(
++                        "tool_calls"
++                    )
++                )
++            )
++
++
++            self.loaded = True
++
++
++            return BrainResult(
++
++                success=True,
++
++                text=content,
++
++                raw=response,
++
++                tool_calls=tool_calls
++            )
++
++
++        except Exception as e:
++
++            return BrainResult(
++
++                success=False,
++
++                error=str(e)
++            )
++
++
++# =========================================================
++# PRUEBA DIRECTA
++#
++# python -m brain.llama_cpp_provider http://IP_PC:8080
++# =========================================================
++
++if __name__ == "__main__":
++
++    import sys
++
++    from config_manager import get_config
++
++
++    # La clave sale del config.json de Mochi (sección brain).
++    brain_config = (
++        get_config()
++        .get("brain", {})
++    )
++
++    provider = LlamaCppProvider(
++        base_url=(
++            sys.argv[1]
++            if len(sys.argv) > 1
++            else brain_config.get("base_url") or "http://localhost:8080"
++        ),
++        api_key=brain_config.get("api_key")
++    )
++
++
++    print("")
++    print(
++        "======================================"
++    )
++    print(
++        "      LLAMA.CPP PROVIDER TEST"
++    )
++    print(
++        "======================================"
++    )
++
++
++    print(
++        f"Servidor: {provider.base_url}"
++    )
++
++    print(
++        f"Disponible: "
++        f"{provider.is_available()}"
++    )
++
++    print(
++        f"Modelos: "
++        f"{[m['name'] for m in provider.list_models()]}"
++    )
++
++
++    result = provider.generate(
++
++        messages=[
++            {
++                "role": "user",
++                "content": "Respondé solo: hola, soy Mochi."
++            }
++        ],
++
++        options={
++            "temperature": 0.1,
++            "think": False,
++            "num_predict": 64
++        }
++    )
++
++
++    print(
++        f"Respuesta: {result.text or result.error}"
++    )
++
++    print(
++        "======================================"
++    )
+diff --git a/mochi-desktop - V0.3/chrome_profiles.py b/mochi-desktop - V0.3/chrome_profiles.py
+index 5ecd1bc..a5cea8b 100644
+--- a/mochi-desktop - V0.3/chrome_profiles.py	
++++ b/mochi-desktop - V0.3/chrome_profiles.py	
+@@ -14,6 +14,12 @@ def find_chrome_executable():
+     ni de una ruta fija.
+     """
+ 
++    # Linux: Google Chrome o Chromium desde el PATH.
++    if os.name != "nt":
++        from linux_platform import chrome
++
++        return chrome.find_chrome_executable()
++
+     # 1. Buscar en registro de Windows
+     if winreg is not None:
+ 
+@@ -112,6 +118,11 @@ def find_chrome_executable():
+ 
+ def get_chrome_user_data_dir():
+ 
++    if os.name != "nt":
++        from linux_platform import chrome
++
++        return chrome.get_chrome_user_data_dir()
++
+     local_app_data = os.environ.get(
+         "LOCALAPPDATA"
+     )
+diff --git a/mochi-desktop - V0.3/config_manager.py b/mochi-desktop - V0.3/config_manager.py
+index 0a34410..a1a2f46 100644
+--- a/mochi-desktop - V0.3/config_manager.py	
++++ b/mochi-desktop - V0.3/config_manager.py	
+@@ -421,6 +421,18 @@ def _create_brain_config():
+             None,
+ 
+         "vision_enabled":
++            False,
++
++        # Solo para runtime "llama_cpp":
++        # URL de llama-server en la PC del LLM.
++        "base_url":
++            None,
++
++        "api_key":
++            None,
++
++        # Mochi usa el modelo sin razonamiento.
++        "thinking_enabled":
+             False
+     }
+ 
+diff --git a/mochi-desktop - V0.3/desktop_tools.py b/mochi-desktop - V0.3/desktop_tools.py
+index eddc7ac..19aa443 100644
+--- a/mochi-desktop - V0.3/desktop_tools.py	
++++ b/mochi-desktop - V0.3/desktop_tools.py	
+@@ -13,6 +13,9 @@ from pathlib import Path
+ 
+ from mochi_environment import environment
+ 
++if os.name != "nt":
++    from linux_platform import desktop as linux_desktop
++
+ 
+ CF_UNICODETEXT = 13
+ GMEM_MOVEABLE = 0x0002
+@@ -75,6 +78,9 @@ class DesktopTools:
+         return True, ""
+ 
+     def read_clipboard(self):
++        if os.name != "nt":
++            return linux_desktop.read_clipboard()
++
+         if not self._available():
+             return False, "El portapapeles nativo solo está disponible en Windows."
+ 
+@@ -99,7 +105,7 @@ class DesktopTools:
+             user32.CloseClipboard()
+ 
+     def write_clipboard(self, text):
+-        if not self._available():
++        if os.name == "nt" and not self._available():
+             return False, "El portapapeles nativo solo está disponible en Windows."
+ 
+         text = str(text or "")
+@@ -108,6 +114,9 @@ class DesktopTools:
+         if len(text) > MAX_CLIPBOARD_CHARS:
+             return False, "El texto es demasiado largo para copiarlo de forma segura."
+ 
++        if os.name != "nt":
++            return linux_desktop.write_clipboard(text)
++
+         user32, kernel32 = self._clipboard_apis()
+         buffer = ctypes.create_unicode_buffer(text)
+         size = ctypes.sizeof(buffer)
+@@ -155,11 +164,12 @@ class DesktopTools:
+         return str(value).replace("'", "''")
+ 
+     def capture_screenshot(self, name=None):
+-        if os.name != "nt":
+-            return False, "La captura de pantalla solo está disponible en Windows."
+-
+         path = self._safe_screenshot_path(name)
+         path.parent.mkdir(parents=True, exist_ok=True)
++
++        if os.name != "nt":
++            return linux_desktop.capture_screenshot(path)
++
+         quoted_path = self._ps_quote(path)
+         script = (
+             "Add-Type -AssemblyName System.Windows.Forms; "
+@@ -177,14 +187,14 @@ class DesktopTools:
+         return True, path
+ 
+     def show_notification(self, title, message):
+-        if os.name != "nt":
+-            return False, "Las notificaciones solo están disponibles en Windows."
+-
+         title = str(title or "").strip()[:120]
+         message = str(message or "").strip()[:500]
+         if not title or not message:
+             return False, "La notificación necesita título y mensaje."
+ 
++        if os.name != "nt":
++            return linux_desktop.show_notification(title, message)
++
+         quoted_title = self._ps_quote(title)
+         quoted_message = self._ps_quote(message)
+         # NotifyIcon provides a non-blocking Windows notification without a
+diff --git a/mochi-desktop - V0.3/discovery/applications.py b/mochi-desktop - V0.3/discovery/applications.py
+index 0081ce2..57d538a 100644
+--- a/mochi-desktop - V0.3/discovery/applications.py	
++++ b/mochi-desktop - V0.3/discovery/applications.py	
+@@ -429,6 +429,25 @@ def discover_applications():
+     applications = []
+ 
+ 
++    # Linux: entradas .desktop del menú de aplicaciones.
++    if os.name != "nt":
++        from linux_platform.applications import (
++            discover_desktop_entries
++        )
++
++        applications.extend(
++            discover_desktop_entries(
++                normalize_name
++            )
++        )
++
++        print(
++            f"Se detectaron {len(applications)} entradas."
++        )
++
++        return applications
++
++
+     applications.extend(
+         discover_start_menu_shortcuts()
+     )
+diff --git a/mochi-desktop - V0.3/discovery/games.py b/mochi-desktop - V0.3/discovery/games.py
+index 6f0b716..a27d53d 100644
+--- a/mochi-desktop - V0.3/discovery/games.py	
++++ b/mochi-desktop - V0.3/discovery/games.py	
+@@ -59,6 +59,15 @@ def find_steam_path():
+             Path(program_files) / "Steam"
+         )
+ 
++    # Linux: Steam nativo y Flatpak.
++    if os.name != "nt":
++        home = Path.home()
++        candidates.extend([
++            home / ".local" / "share" / "Steam",
++            home / ".steam" / "steam",
++            home / ".var" / "app" / "com.valvesoftware.Steam" / "data" / "Steam",
++        ])
++
+     for path in candidates:
+         if path.exists():
+             return path
+diff --git a/mochi-desktop - V0.3/discovery/user_folders.py b/mochi-desktop - V0.3/discovery/user_folders.py
+index 403d468..430815b 100644
+--- a/mochi-desktop - V0.3/discovery/user_folders.py	
++++ b/mochi-desktop - V0.3/discovery/user_folders.py	
+@@ -129,6 +129,18 @@ def discover_user_folders():
+             )
+         )
+ 
++
++        # Linux: xdg-user-dirs (Escritorio, Documentos...).
++        if detected is None and os.name != "nt":
++
++            from linux_platform.folders import (
++                read_xdg_folder
++            )
++
++            detected = read_xdg_folder(
++                name
++            )
++
+         if (
+             detected is None
+             and fallback[name].exists()
+diff --git a/mochi-desktop - V0.3/discovery/windows.py b/mochi-desktop - V0.3/discovery/windows.py
+index e18d33e..a76359a 100644
+--- a/mochi-desktop - V0.3/discovery/windows.py	
++++ b/mochi-desktop - V0.3/discovery/windows.py	
+@@ -1,9 +1,13 @@
+ import re
+ import unicodedata
+ 
++import os
++
+ import psutil
+-import win32gui
+-import win32process
++
++if os.name == "nt":
++    import win32gui
++    import win32process
+ 
+ 
+ def normalize_window_name(text: str) -> str:
+@@ -38,6 +42,17 @@ def normalize_window_name(text: str) -> str:
+ 
+ def discover_windows():
+ 
++    # Linux (KDE Plasma): las ventanas se piden a KWin.
++    if os.name != "nt":
++        from linux_platform.windows import (
++            discover_windows as discover_linux_windows
++        )
++
++        return discover_linux_windows(
++            normalize_window_name
++        )
++
++
+     windows = []
+ 
+ 
+diff --git a/mochi-desktop - V0.3/file_manager.py b/mochi-desktop - V0.3/file_manager.py
+index 64044ee..6c2aa87 100644
+--- a/mochi-desktop - V0.3/file_manager.py	
++++ b/mochi-desktop - V0.3/file_manager.py	
+@@ -5,6 +5,7 @@ import unicodedata
+ from difflib import SequenceMatcher
+ from pathlib import Path
+ 
++from linux_platform import system_open
+ from discovery.user_folders import (
+     discover_user_folders
+ )
+@@ -178,7 +179,7 @@ class FileManager:
+ 
+         try:
+ 
+-            os.startfile(
++            system_open(
+                 str(path)
+             )
+ 
+diff --git a/mochi-desktop - V0.3/game_registry.py b/mochi-desktop - V0.3/game_registry.py
+index 0469fcc..74a4ae8 100644
+--- a/mochi-desktop - V0.3/game_registry.py	
++++ b/mochi-desktop - V0.3/game_registry.py	
+@@ -9,6 +9,7 @@ from discovery.games import (
+     is_playable_game,
+     normalize_game_name
+ )
++from linux_platform import system_open
+ from mochi_environment import environment
+ 
+ 
+@@ -247,7 +248,7 @@ class GameRegistry:
+ 
+         try:
+ 
+-            os.startfile(uri)
++            system_open(uri)
+ 
+             return (
+                 True,
+diff --git a/mochi-desktop - V0.3/hardware_profiler.py b/mochi-desktop - V0.3/hardware_profiler.py
+index e465924..e776962 100644
+--- a/mochi-desktop - V0.3/hardware_profiler.py	
++++ b/mochi-desktop - V0.3/hardware_profiler.py	
+@@ -108,6 +108,30 @@ class HardwareProfiler:
+             )
+ 
+ 
++        # -------------------------------------------------
++        # Linux: /proc/cpuinfo
++        # -------------------------------------------------
++
++        if not cpu_name and os.name != "nt":
++
++            try:
++
++                with open("/proc/cpuinfo", encoding="utf-8") as file:
++
++                    for line in file:
++
++                        if line.startswith("model name"):
++
++                            cpu_name = (
++                                line.split(":", 1)[1].strip()
++                            )
++
++                            break
++
++            except OSError:
++                pass
++
++
+         # -------------------------------------------------
+         # Fallback
+         # -------------------------------------------------
+diff --git a/mochi-desktop - V0.3/linux_platform/__init__.py b/mochi-desktop - V0.3/linux_platform/__init__.py
+new file mode 100644
+index 0000000..60d12e8
+--- /dev/null
++++ b/mochi-desktop - V0.3/linux_platform/__init__.py	
+@@ -0,0 +1,44 @@
++"""
++Soporte de Linux (KDE Plasma / Wayland) para Mochi Desktop.
++
++En Windows no se usa nada de este paquete: cada módulo de Mochi
++sigue con su implementación original (win32, UIA, PowerShell).
++En Linux, esos módulos importan de acá el reemplazo equivalente.
++
++- kwin.py          ventanas (scripts de KWin por D-Bus)
++- win32_compat.py  lo poco de win32gui/win32con que usa Mochi
++- media.py         multimedia (MPRIS) y volumen (wpctl)
++- desktop.py       portapapeles, captura y notificaciones
++- applications.py  aplicaciones instaladas (.desktop)
++- folders.py       carpetas del usuario (xdg-user-dir)
++"""
++
++import os
++import subprocess
++import sys
++
++
++IS_WINDOWS = os.name == "nt"
++IS_LINUX = sys.platform.startswith("linux")
++
++
++# =========================================================
++# ABRIR CON LA APLICACIÓN PREDETERMINADA
++# =========================================================
++
++def system_open(target):
++    """
++    Equivalente de os.startfile: abre un archivo, carpeta
++    o URI (spotify:, steam://...) con la aplicación del sistema.
++    """
++
++    if IS_WINDOWS:
++        os.startfile(target)
++        return
++
++    subprocess.Popen(
++        ["xdg-open", str(target)],
++        stdout=subprocess.DEVNULL,
++        stderr=subprocess.DEVNULL,
++        start_new_session=True,
++    )
+diff --git a/mochi-desktop - V0.3/linux_platform/applications.py b/mochi-desktop - V0.3/linux_platform/applications.py
+new file mode 100644
+index 0000000..82537c8
+--- /dev/null
++++ b/mochi-desktop - V0.3/linux_platform/applications.py	
+@@ -0,0 +1,140 @@
++"""
++Aplicaciones instaladas en Linux: entradas .desktop del menú
++(sistema, usuario y Flatpak). Devuelve la misma forma que
++discovery/applications.py en Windows, con type "desktop_entry".
++"""
++
++import configparser
++import os
++import subprocess
++from pathlib import Path
++
++
++def _application_dirs():
++
++    home = Path.home()
++
++    data_home = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
++
++    data_dirs = [
++        Path(item)
++        for item in (
++            os.environ.get("XDG_DATA_DIRS")
++            or "/usr/local/share:/usr/share"
++        ).split(":")
++        if item
++    ]
++
++    candidates = [
++        data_home,
++        *data_dirs,
++        data_home / "flatpak" / "exports" / "share",
++        Path("/var/lib/flatpak/exports/share"),
++    ]
++
++    seen = set()
++
++    for base in candidates:
++        directory = base / "applications"
++        if directory.is_dir() and directory not in seen:
++            seen.add(directory)
++            yield directory
++
++
++def _localized(section, key):
++    """Name[es_AR] > Name[es] > Name."""
++
++    language = (os.environ.get("LANG") or "es").split(".")[0]
++
++    for variant in (f"{key}[{language}]", f"{key}[{language.split('_')[0]}]", key):
++        value = section.get(variant)
++        if value:
++            return value.strip()
++
++    return ""
++
++
++def discover_desktop_entries(normalize_name):
++
++    named = {}
++    generic = []
++
++    for directory in _application_dirs():
++
++        for file in sorted(directory.rglob("*.desktop")):
++
++            # El id es la ruta relativa con "-" en lugar de "/".
++            desktop_id = (
++                str(file.relative_to(directory))
++                .removesuffix(".desktop")
++                .replace("/", "-")
++            )
++
++            # El primero que aparece (usuario antes que sistema) manda.
++            if desktop_id in named:
++                continue
++
++            parser = configparser.ConfigParser(interpolation=None, strict=False)
++            parser.optionxform = str
++
++            try:
++                parser.read(file, encoding="utf-8")
++                section = parser["Desktop Entry"]
++
++            except Exception:
++                continue
++
++            hidden = (
++                section.get("Type") != "Application"
++                or section.get("NoDisplay", "").lower() == "true"
++                or section.get("Hidden", "").lower() == "true"
++            )
++
++            name = _localized(section, "Name")
++
++            if hidden or not name:
++                named[desktop_id] = None
++                continue
++
++            entry = {
++                "name": name,
++                "normalized_name": normalize_name(name),
++                "type": "desktop_entry",
++                "target": desktop_id,
++                "source": "desktop_entry",
++            }
++            named[desktop_id] = entry
++
++            # "Calculadora", "Navegador web": también sirve el nombre
++            # genérico, pero tiene menos prioridad que los nombres propios.
++            generic_name = _localized(section, "GenericName")
++
++            if generic_name and normalize_name(generic_name) != entry["normalized_name"]:
++                generic.append({
++                    **entry,
++                    "name": generic_name,
++                    "normalized_name": normalize_name(generic_name),
++                    "source": "desktop_entry_generic",
++                })
++
++    applications = [entry for entry in named.values() if entry]
++
++    names = {entry["normalized_name"] for entry in applications}
++
++    applications.extend(
++        entry
++        for entry in generic
++        if entry["normalized_name"] not in names
++    )
++
++    return applications
++
++
++def launch_desktop_entry(desktop_id):
++
++    subprocess.Popen(
++        ["gtk-launch", desktop_id],
++        stdout=subprocess.DEVNULL,
++        stderr=subprocess.DEVNULL,
++        start_new_session=True,
++    )
+diff --git a/mochi-desktop - V0.3/linux_platform/chrome.py b/mochi-desktop - V0.3/linux_platform/chrome.py
+new file mode 100644
+index 0000000..88d7f43
+--- /dev/null
++++ b/mochi-desktop - V0.3/linux_platform/chrome.py	
+@@ -0,0 +1,41 @@
++"""
++Chrome / Chromium en Linux: ejecutable y carpeta de perfiles.
++Se prefiere Google Chrome; si no está, Chromium.
++"""
++
++import shutil
++from pathlib import Path
++
++
++# (ejecutable, carpeta de perfiles dentro de ~/.config)
++BROWSERS = [
++    ("google-chrome-stable", "google-chrome"),
++    ("google-chrome", "google-chrome"),
++    ("chromium", "chromium"),
++    ("chromium-browser", "chromium"),
++]
++
++
++def _installed():
++
++    for executable, config_name in BROWSERS:
++        path = shutil.which(executable)
++        if path:
++            return path, Path.home() / ".config" / config_name
++
++    return None, None
++
++
++def find_chrome_executable():
++
++    return _installed()[0]
++
++
++def get_chrome_user_data_dir():
++
++    user_data_dir = _installed()[1]
++
++    if user_data_dir is not None and user_data_dir.exists():
++        return user_data_dir
++
++    return None
+diff --git a/mochi-desktop - V0.3/linux_platform/desktop.py b/mochi-desktop - V0.3/linux_platform/desktop.py
+new file mode 100644
+index 0000000..876c654
+--- /dev/null
++++ b/mochi-desktop - V0.3/linux_platform/desktop.py	
+@@ -0,0 +1,124 @@
++"""
++Portapapeles, captura de pantalla y notificaciones en KDE Plasma
++(Wayland). Cada función devuelve (ok, detalle), igual que
++DesktopTools en Windows.
++"""
++
++import subprocess
++
++from jeepney import DBusAddress, new_method_call
++from jeepney.io.blocking import open_dbus_connection
++
++
++def _run(arguments, input_text=None, timeout=10):
++
++    try:
++        result = subprocess.run(
++            arguments,
++            input=input_text,
++            capture_output=True,
++            text=True,
++            timeout=timeout,
++        )
++
++    except (OSError, subprocess.SubprocessError) as error:
++        return False, str(error)
++
++    if result.returncode != 0:
++        return False, (result.stderr or result.stdout or f"{arguments[0]} falló").strip()
++
++    return True, result.stdout
++
++
++# =========================================================
++# PORTAPAPELES (wl-clipboard)
++# =========================================================
++
++def read_clipboard():
++
++    ok, output = _run(["wl-paste", "--no-newline", "--type", "text"], timeout=5)
++
++    if not ok:
++        if "No selection" in output or "nothing is copied" in output.lower():
++            return False, "El portapapeles no contiene texto."
++        return False, f"No pude leer el portapapeles: {output}"
++
++    return True, output
++
++
++def write_clipboard(text):
++
++    try:
++        # wl-copy queda en segundo plano sirviendo el contenido:
++        # no se espera a que termine.
++        process = subprocess.Popen(
++            ["wl-copy", "--type", "text/plain;charset=utf-8"],
++            stdin=subprocess.PIPE,
++            stdout=subprocess.DEVNULL,
++            stderr=subprocess.DEVNULL,
++            start_new_session=True,
++        )
++        process.stdin.write(text.encode("utf-8"))
++        process.stdin.close()
++
++    except OSError as error:
++        return False, f"No pude copiar el texto al portapapeles: {error}"
++
++    return True, "Texto copiado al portapapeles."
++
++
++# =========================================================
++# CAPTURA DE PANTALLA (Spectacle)
++# =========================================================
++
++def capture_screenshot(path):
++
++    # -b sin interfaz, -n sin notificación, -f pantalla completa.
++    ok, detail = _run(
++        ["spectacle", "-b", "-n", "-f", "-o", str(path)],
++        timeout=20,
++    )
++
++    if not ok or not path.exists():
++        return False, detail or "Spectacle no creó la captura de pantalla."
++
++    return True, path
++
++
++# =========================================================
++# NOTIFICACIONES (org.freedesktop.Notifications)
++# =========================================================
++
++def show_notification(title, message):
++
++    notifications = DBusAddress(
++        "/org/freedesktop/Notifications",
++        bus_name="org.freedesktop.Notifications",
++        interface="org.freedesktop.Notifications",
++    )
++
++    try:
++        with open_dbus_connection(bus="SESSION") as conn:
++            conn.send_and_get_reply(
++                new_method_call(
++                    notifications,
++                    "Notify",
++                    "susssasa{sv}i",
++                    (
++                        "Mochi",          # aplicación
++                        0,                # no reemplaza ninguna
++                        "dialog-information",
++                        title,
++                        message,
++                        [],               # sin botones
++                        {},
++                        5000,             # ms
++                    ),
++                ),
++                timeout=5,
++            )
++
++    except Exception as error:
++        return False, f"No pude enviar la notificación: {error}"
++
++    return True, "Notificación enviada al escritorio."
+diff --git a/mochi-desktop - V0.3/linux_platform/folders.py b/mochi-desktop - V0.3/linux_platform/folders.py
+new file mode 100644
+index 0000000..f4051ad
+--- /dev/null
++++ b/mochi-desktop - V0.3/linux_platform/folders.py	
+@@ -0,0 +1,49 @@
++"""
++Carpetas del usuario en Linux según xdg-user-dirs (en un sistema
++en español son Escritorio, Documentos, Descargas, etc.).
++"""
++
++import subprocess
++from pathlib import Path
++
++
++XDG_FOLDER_KEYS = {
++    "desktop": "DESKTOP",
++    "documents": "DOCUMENTS",
++    "downloads": "DOWNLOAD",
++    "pictures": "PICTURES",
++    "music": "MUSIC",
++    "videos": "VIDEOS",
++}
++
++
++def read_xdg_folder(name):
++
++    key = XDG_FOLDER_KEYS.get(name)
++
++    if key is None:
++        return None
++
++    try:
++        result = subprocess.run(
++            ["xdg-user-dir", key],
++            capture_output=True,
++            text=True,
++            timeout=5,
++        )
++
++    except (OSError, subprocess.SubprocessError):
++        return None
++
++    value = result.stdout.strip()
++
++    if not value:
++        return None
++
++    path = Path(value)
++
++    # Sin configurar, xdg-user-dir devuelve el HOME: no sirve.
++    if path == Path.home() or not path.exists():
++        return None
++
++    return path
+diff --git a/mochi-desktop - V0.3/linux_platform/kwin.py b/mochi-desktop - V0.3/linux_platform/kwin.py
+new file mode 100644
+index 0000000..62d97b0
+--- /dev/null
++++ b/mochi-desktop - V0.3/linux_platform/kwin.py	
+@@ -0,0 +1,247 @@
++"""
++Ventanas en KDE Plasma (Wayland) a través de KWin.
++
++En Wayland ninguna aplicación puede ver ni mover las ventanas de
++otra. La única vía es el propio compositor: se le carga a KWin un
++script corto por D-Bus, el script hace el trabajo y devuelve el
++resultado llamando de vuelta a esta conexión D-Bus (callDBus).
++
++Cada llamada abre su conexión, carga el script, lo corre y lo
++descarga. Tarda unos 20-50 ms.
++"""
++
++import itertools
++import json
++import os
++import tempfile
++import threading
++
++from jeepney import (
++    DBusAddress,
++    MatchRule,
++    new_method_call,
++    new_method_return,
++)
++from jeepney.bus_messages import message_bus
++from jeepney.io.blocking import open_dbus_connection
++
++
++SCRIPT_TIMEOUT_SECONDS = 3
++
++BRIDGE_INTERFACE = "org.mochi.KWinBridge"
++
++KWIN_SCRIPTING = DBusAddress(
++    "/Scripting",
++    bus_name="org.kde.KWin",
++    interface="org.kde.kwin.Scripting",
++)
++
++_counter = itertools.count()
++_lock = threading.Lock()
++
++
++class KWinError(RuntimeError):
++    pass
++
++
++# =========================================================
++# CORRER UN SCRIPT EN KWIN
++# =========================================================
++
++def _run_script(body):
++    """
++    Corre `body` (JavaScript) dentro de KWin. El script tiene que
++    llamar a reply(valor) una vez; se devuelve ese valor.
++    """
++
++    with _lock:
++
++        number = next(_counter)
++        service = f"{BRIDGE_INTERFACE}.p{os.getpid()}n{number}"
++        plugin_name = f"mochi-{os.getpid()}-{number}"
++
++        script = (
++            "function reply(value) {\n"
++            f"  callDBus({json.dumps(service)}, \"/\", "
++            f"{json.dumps(BRIDGE_INTERFACE)}, \"result\", "
++            "JSON.stringify(value === undefined ? null : value));\n"
++            "}\n"
++            "try {\n"
++            f"{body}\n"
++            "} catch (error) {\n"
++            "  reply({ __error: String(error) });\n"
++            "}\n"
++        )
++
++        fd, path = tempfile.mkstemp(prefix="mochi-kwin-", suffix=".js")
++
++        try:
++            os.write(fd, script.encode("utf-8"))
++            os.close(fd)
++
++            with open_dbus_connection(bus="SESSION") as conn:
++
++                # Nombre propio en el bus para que el script nos encuentre.
++                conn.send_and_get_reply(message_bus.RequestName(service))
++
++                script_id = conn.send_and_get_reply(
++                    new_method_call(
++                        KWIN_SCRIPTING,
++                        "loadScript",
++                        "ss",
++                        (path, plugin_name),
++                    )
++                ).body[0]
++
++                if script_id < 0:
++                    raise KWinError("KWin no aceptó el script")
++
++                script_address = DBusAddress(
++                    f"/Scripting/Script{script_id}",
++                    bus_name="org.kde.KWin",
++                    interface="org.kde.kwin.Script",
++                )
++
++                rule = MatchRule(
++                    type="method_call",
++                    interface=BRIDGE_INTERFACE,
++                )
++
++                try:
++
++                    # El filtro tiene que estar antes de run(): el
++                    # script responde mientras KWin todavía procesa run.
++                    with conn.filter(rule) as queue:
++
++                        conn.send_and_get_reply(
++                            new_method_call(script_address, "run")
++                        )
++
++                        message = conn.recv_until_filtered(
++                            queue,
++                            timeout=SCRIPT_TIMEOUT_SECONDS,
++                        )
++
++                        conn.send(new_method_return(message))
++
++                finally:
++
++                    conn.send_and_get_reply(
++                        new_method_call(
++                            KWIN_SCRIPTING,
++                            "unloadScript",
++                            "s",
++                            (plugin_name,),
++                        )
++                    )
++
++        except TimeoutError as error:
++            raise KWinError("KWin no respondió a tiempo") from error
++
++        except (OSError, ConnectionError) as error:
++            raise KWinError(f"No pude hablar con KWin: {error}") from error
++
++        finally:
++            try:
++                os.unlink(path)
++            except OSError:
++                pass
++
++    result = json.loads(message.body[0])
++
++    if isinstance(result, dict) and "__error" in result:
++        raise KWinError(result["__error"])
++
++    return result
++
++
++# =========================================================
++# LISTAR VENTANAS
++# =========================================================
++
++_LIST_SCRIPT = """
++const active = workspace.activeWindow;
++reply(workspace.windowList()
++  .filter(w => (w.normalWindow || w.dialog) && !w.skipTaskbar)
++  .map(w => ({
++    id: String(w.internalId),
++    title: w.caption,
++    pid: w.pid,
++    resource_class: w.resourceClass,
++    desktop_file: w.desktopFileName,
++    minimized: w.minimized,
++    active: w === active
++  })));
++"""
++
++
++def list_windows():
++    """
++    Ventanas de aplicación (sin paneles ni escritorio), en el
++    orden de apilado de KWin.
++    """
++
++    return _run_script(_LIST_SCRIPT) or []
++
++
++# =========================================================
++# ACCIONES SOBRE UNA VENTANA
++# =========================================================
++
++_ACTIONS = {
++    "restore":
++        "w.minimized = false;",
++
++    "focus":
++        "w.minimized = false; workspace.activeWindow = w;",
++
++    "minimize":
++        "w.minimized = true;",
++
++    "maximize":
++        "w.minimized = false; w.setMaximize(true, true); "
++        "workspace.activeWindow = w;",
++
++    # Pide el cierre normal (como el botón X): no mata el proceso.
++    "close":
++        "w.closeWindow();",
++}
++
++
++def window_action(window_id, action):
++    """Devuelve True si la ventana existía y se aplicó la acción."""
++
++    if action not in _ACTIONS:
++        raise ValueError(f"Acción de ventana desconocida: {action}")
++
++    body = (
++        f"const id = {json.dumps(str(window_id))};\n"
++        "const w = workspace.windowList()"
++        ".find(x => String(x.internalId) === id);\n"
++        "if (!w) { reply(false); } else {\n"
++        f"  {_ACTIONS[action]}\n"
++        "  reply(true);\n"
++        "}\n"
++    )
++
++    return bool(_run_script(body))
++
++
++def is_minimized(window_id):
++
++    body = (
++        f"const id = {json.dumps(str(window_id))};\n"
++        "const w = workspace.windowList()"
++        ".find(x => String(x.internalId) === id);\n"
++        "reply(w ? w.minimized : false);\n"
++    )
++
++    return bool(_run_script(body))
++
++
++def active_window_id():
++
++    return _run_script(
++        "reply(workspace.activeWindow ? "
++        "String(workspace.activeWindow.internalId) : null);"
++    )
+diff --git a/mochi-desktop - V0.3/linux_platform/media.py b/mochi-desktop - V0.3/linux_platform/media.py
+new file mode 100644
+index 0000000..977e14c
+--- /dev/null
++++ b/mochi-desktop - V0.3/linux_platform/media.py	
+@@ -0,0 +1,756 @@
++"""
++Multimedia y volumen en Linux.
++
++- Sesiones multimedia: MPRIS por D-Bus (Chromium, Firefox, Spotify,
++  VLC... todos lo publican). Es el equivalente de la sesión
++  multimedia global de Windows (GlobalSystemMediaTransportControls).
++- Volumen: wpctl (PipeWire), sobre la salida predeterminada.
++
++Los identificadores que leen las herramientas del Brain ("scope",
++códigos de "error") se mantienen iguales a los de Windows para que
++el agent loop no tenga que distinguir plataformas.
++"""
++
++import re
++import subprocess
++import threading
++import time
++
++from jeepney import DBusAddress, new_method_call
++from jeepney.io.blocking import open_dbus_connection
++
++from media_controller import MediaController
++
++
++MPRIS_PREFIX = "org.mpris.MediaPlayer2."
++MPRIS_PATH = "/org/mpris/MediaPlayer2"
++PLAYER_INTERFACE = "org.mpris.MediaPlayer2.Player"
++ROOT_INTERFACE = "org.mpris.MediaPlayer2"
++
++# KDE duplica las sesiones de los navegadores con esta extensión.
++PLASMA_BROWSER = MPRIS_PREFIX + "plasma-browser-integration"
++
++SESSION_SCOPE = "active_windows_media_session"
++
++DEFAULT_SINK = "@DEFAULT_AUDIO_SINK@"
++
++# Paso de las teclas de volumen de Windows.
++VOLUME_STEP_PERCENT = 2
++
++
++# =========================================================
++# MPRIS
++# =========================================================
++
++def _unwrap(value):
++    """jeepney devuelve los variants como (firma, valor)."""
++
++    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], str):
++        return _unwrap(value[1])
++
++    if isinstance(value, dict):
++        return {key: _unwrap(item) for key, item in value.items()}
++
++    if isinstance(value, list):
++        return [_unwrap(item) for item in value]
++
++    return value
++
++
++class MprisPlayer:
++
++    def __init__(self, conn, bus_name):
++
++        self.conn = conn
++        self.bus_name = bus_name
++        self.props = {}
++        self.identity = ""
++
++
++    def _address(self, interface):
++
++        return DBusAddress(
++            MPRIS_PATH,
++            bus_name=self.bus_name,
++            interface=interface,
++        )
++
++
++    def refresh(self):
++
++        properties = DBusAddress(
++            MPRIS_PATH,
++            bus_name=self.bus_name,
++            interface="org.freedesktop.DBus.Properties",
++        )
++
++        reply = self.conn.send_and_get_reply(
++            new_method_call(properties, "GetAll", "s", (PLAYER_INTERFACE,)),
++            timeout=2,
++        )
++        self.props = _unwrap(reply.body[0])
++
++        if not self.identity:
++            try:
++                reply = self.conn.send_and_get_reply(
++                    new_method_call(properties, "Get", "ss", (ROOT_INTERFACE, "Identity")),
++                    timeout=2,
++                )
++                self.identity = str(_unwrap(reply.body[0]) or "")
++            except Exception:
++                self.identity = ""
++
++        return self
++
++
++    def call(self, method, signature=None, body=()):
++
++        self.conn.send_and_get_reply(
++            new_method_call(self._address(PLAYER_INTERFACE), method, signature, body),
++            timeout=2,
++        )
++
++
++    # -----------------------------------------------------
++
++    @property
++    def source(self):
++        """Equivalente al source_app_user_model_id de Windows."""
++
++        name = self.bus_name.removeprefix(MPRIS_PREFIX)
++        # chromium.instance1234 -> chromium
++        return name.split(".instance")[0]
++
++
++    @property
++    def metadata(self):
++
++        return self.props.get("Metadata") or {}
++
++
++    @property
++    def title(self):
++
++        return str(self.metadata.get("xesam:title") or "")
++
++
++    @property
++    def artist(self):
++
++        artist = self.metadata.get("xesam:artist") or ""
++
++        if isinstance(artist, list):
++            return ", ".join(str(item) for item in artist)
++
++        return str(artist)
++
++
++    @property
++    def status(self):
++        """playing / paused / stopped, como en Windows."""
++
++        return str(self.props.get("PlaybackStatus") or "stopped").casefold()
++
++
++    @property
++    def position_seconds(self):
++
++        return float(self.props.get("Position") or 0) / 1_000_000
++
++
++    @property
++    def duration_seconds(self):
++
++        return float(self.metadata.get("mpris:length") or 0) / 1_000_000
++
++
++    @property
++    def track_id(self):
++
++        return self.metadata.get("mpris:trackid")
++
++
++    def read_position(self):
++        """Position no siempre viene en GetAll actualizado: se pide aparte."""
++
++        properties = DBusAddress(
++            MPRIS_PATH,
++            bus_name=self.bus_name,
++            interface="org.freedesktop.DBus.Properties",
++        )
++
++        try:
++            reply = self.conn.send_and_get_reply(
++                new_method_call(properties, "Get", "ss", (PLAYER_INTERFACE, "Position")),
++                timeout=2,
++            )
++            return float(_unwrap(reply.body[0]) or 0) / 1_000_000
++
++        except Exception:
++            return self.position_seconds
++
++
++def _list_players(conn):
++
++    bus = DBusAddress(
++        "/org/freedesktop/DBus",
++        bus_name="org.freedesktop.DBus",
++        interface="org.freedesktop.DBus",
++    )
++
++    names = conn.send_and_get_reply(new_method_call(bus, "ListNames")).body[0]
++
++    players = []
++
++    for name in sorted(names):
++
++        if not name.startswith(MPRIS_PREFIX):
++            continue
++
++        try:
++            players.append(MprisPlayer(conn, name).refresh())
++        except Exception:
++            # Un reproductor colgado no tiene que tapar a los demás.
++            continue
++
++    # Si la extensión de Plasma repite una sesión que el navegador
++    # ya publica, se queda la del navegador.
++    browser_titles = {
++        player.title
++        for player in players
++        if player.bus_name != PLASMA_BROWSER
++    }
++
++    return [
++        player
++        for player in players
++        if not (player.bus_name == PLASMA_BROWSER and player.title in browser_titles)
++    ]
++
++
++def _current_player(players):
++    """
++    La sesión "actual": la que está sonando; si ninguna suena,
++    la primera pausada; si no, cualquiera.
++    """
++
++    for wanted in ("playing", "paused"):
++        for player in players:
++            if player.status == wanted:
++                return player
++
++    return players[0] if players else None
++
++
++# =========================================================
++# CONTROLADOR
++# =========================================================
++
++class LinuxMediaController(MediaController):
++
++    def __init__(self):
++
++        # No hay user32: no se llama al __init__ de Windows.
++        self._lock = threading.RLock()
++
++
++    # =====================================================
++    # SESIÓN MULTIMEDIA (MPRIS)
++    # =====================================================
++
++    def _session_context(self, conn, expected_title=None):
++
++        players = _list_players(conn)
++        player = _current_player(players)
++
++        if player is None:
++            return None, {
++                "ok": False,
++                "error": "media_session_not_found",
++                "message": "No hay ninguna sesión multimedia activa.",
++            }
++
++        title = player.title
++
++        title_matches = self._session_matches_title(
++            player.source,
++            title,
++            expected_title,
++        )
++        match_scope = "content_title" if title_matches else None
++
++        if not title_matches:
++            summaries = [
++                {"source": item.source, "title": item.title}
++                for item in players
++            ]
++            title_matches = self._unique_exact_browser_session_matches(
++                player.source,
++                title,
++                expected_title,
++                summaries,
++            )
++            if title_matches:
++                match_scope = "unique_exact_browser_provider"
++
++        if not title_matches:
++            return None, {
++                "ok": False,
++                "error": "media_session_mismatch",
++                "message": "La sesión multimedia activa no corresponde a la página activa.",
++                "source": player.source,
++                "title": title,
++            }
++
++        return player, {
++            "source": player.source,
++            "title": title,
++            "artist": player.artist,
++            "session_match": match_scope,
++        }
++
++
++    def _with_session(self, action):
++        """Abre la conexión D-Bus, corre `action(conn)` y traduce errores."""
++
++        try:
++            with self._lock, open_dbus_connection(bus="SESSION") as conn:
++                return action(conn)
++
++        except Exception as error:
++            return {
++                "ok": False,
++                "error": "windows_media_session_failed",
++                "message": str(error),
++            }
++
++
++    # -----------------------------------------------------
++
++    def get_media_session_state(self, expected_title=None):
++
++        def read(conn):
++
++            player, context = self._session_context(conn, expected_title)
++
++            if player is None:
++                return context
++
++            return {
++                "ok": True,
++                "message": f"Sesión multimedia {player.status}.",
++                "scope": SESSION_SCOPE,
++                "state_confirmed": True,
++                "playback_status": player.status,
++                "position_seconds": player.read_position(),
++                "duration_seconds": player.duration_seconds,
++                **context,
++            }
++
++        return self._with_session(read)
++
++
++    def set_media_session_state(self, desired, expected_title=None):
++
++        if desired not in {"play", "pause"}:
++            return {
++                "ok": False,
++                "error": "invalid_media_state",
++                "message": "El estado multimedia debe ser play o pause.",
++            }
++
++        def apply(conn):
++
++            player, context = self._session_context(conn, expected_title)
++
++            if player is None:
++                return context
++
++            before = player.status
++
++            if desired == "play" and before == "playing":
++                accepted = True
++            elif desired == "pause" and before in {"paused", "stopped"}:
++                accepted = True
++            else:
++                accepted = bool(
++                    player.props.get("CanPlay" if desired == "play" else "CanPause", True)
++                )
++                if accepted:
++                    player.call("Play" if desired == "play" else "Pause")
++
++            time.sleep(0.15)
++            after = player.refresh().status
++
++            confirmed = (
++                after == "playing"
++                if desired == "play"
++                else after in {"paused", "stopped"}
++            )
++
++            return {
++                "ok": bool(accepted),
++                "message": (
++                    f"El reproductor confirmó el estado {after}."
++                    if confirmed
++                    else f"El reproductor aceptó la orden, pero quedó en estado {after}."
++                ),
++                "action": desired,
++                "scope": SESSION_SCOPE,
++                "state_confirmed": confirmed,
++                "playback_status": after,
++                "previous_playback_status": before,
++                **context,
++            }
++
++        return self._with_session(apply)
++
++
++    def seek_media_session(self, amount, relative=False, expected_title=None):
++
++        try:
++            amount = float(amount)
++        except (TypeError, ValueError):
++            return {
++                "ok": False,
++                "error": "invalid_media_position",
++                "message": "La posición multimedia debe ser numérica.",
++            }
++
++        def apply(conn):
++
++            player, context = self._session_context(conn, expected_title)
++
++            if player is None:
++                return context
++
++            if not player.props.get("CanSeek", False):
++                return {
++                    "ok": False,
++                    "error": "media_seek_unsupported",
++                    "message": "La sesión multimedia no permite cambiar la posición.",
++                    **context,
++                }
++
++            before = player.read_position()
++            end = player.duration_seconds
++            requested = before + amount if relative else amount
++
++            if end > 0:
++                target, bounds_error = self._resolve_seek_target(0.0, end, requested, relative)
++            else:
++                # El reproductor no publica la duración: no hay límite que validar.
++                target, bounds_error = max(0.0, requested), False
++
++            if bounds_error:
++                return {
++                    "ok": False,
++                    "error": "media_position_out_of_range",
++                    "message": (
++                        f"La posición solicitada ({requested:.1f} s) queda fuera de la duración "
++                        f"publicada por el contenido ({max(0.0, end):.1f} s)."
++                    ),
++                    "action": "adjust_position" if relative else "seek",
++                    "scope": SESSION_SCOPE,
++                    "state_confirmed": False,
++                    "requested_position_seconds": requested,
++                    "duration_seconds": max(0.0, end),
++                    **context,
++                }
++
++            target_us = int(round(target * 1_000_000))
++
++            # SetPosition necesita el trackid; si no lo hay, Seek relativo.
++            if player.track_id:
++                player.call("SetPosition", "ox", (player.track_id, target_us))
++            else:
++                player.call("Seek", "x", (target_us - int(round(before * 1_000_000)),))
++
++            time.sleep(0.35)
++            player.refresh()
++            observed = player.read_position()
++
++            tolerance = 4.0 if player.status == "playing" else 0.75
++            confirmed = abs(observed - target) <= tolerance
++
++            return {
++                "ok": True,
++                "message": (
++                    f"El reproductor confirmó la posición en {observed:.1f} segundos."
++                    if confirmed
++                    else "El reproductor aceptó el desplazamiento, pero no confirmó la posición solicitada."
++                ),
++                "action": "adjust_position" if relative else "seek",
++                "scope": SESSION_SCOPE,
++                "state_confirmed": confirmed,
++                "previous_position_seconds": before,
++                "target_position_seconds": target,
++                "position_seconds": observed,
++                **context,
++            }
++
++        return self._with_session(apply)
++
++
++    def change_media_session_item(self, direction, expected_title=None):
++
++        if direction not in {"next", "previous"}:
++            return {
++                "ok": False,
++                "error": "invalid_media_direction",
++                "message": "La dirección multimedia debe ser next o previous.",
++            }
++
++        def apply(conn):
++
++            player, context = self._session_context(conn, expected_title)
++
++            if player is None:
++                return context
++
++            before_title = player.title
++            can = player.props.get("CanGoNext" if direction == "next" else "CanGoPrevious", True)
++
++            if can:
++                player.call("Next" if direction == "next" else "Previous")
++
++            time.sleep(0.7)
++            after_title = player.refresh().title
++
++            changed = (
++                bool(can)
++                and bool(after_title)
++                and self._normal(after_title) != self._normal(before_title)
++            )
++
++            return {
++                "ok": bool(can),
++                "message": (
++                    f"El reproductor confirmó el cambio a {after_title}."
++                    if changed
++                    else "El reproductor aceptó la navegación, pero no confirmó un elemento multimedia distinto."
++                ),
++                "action": direction,
++                "scope": SESSION_SCOPE,
++                "state_confirmed": changed,
++                "previous_title": before_title,
++                "title": after_title,
++                "source": player.source,
++            }
++
++        return self._with_session(apply)
++
++
++    # =====================================================
++    # "TECLAS" MULTIMEDIA: sobre la sesión actual
++    # =====================================================
++
++    def _player_command(self, method, ok_message, error_message):
++
++        def apply(conn):
++
++            player = _current_player(_list_players(conn))
++
++            if player is None:
++                return {"ok": False}
++
++            player.call(method)
++            return {"ok": True}
++
++        result = self._with_session(apply)
++
++        if result.get("ok"):
++            return True, ok_message
++
++        return False, error_message
++
++
++    def play_pause(self):
++
++        return self._player_command(
++            "PlayPause",
++            "Reproducción alternada",
++            "No pude controlar la reproducción",
++        )
++
++
++    def next_track(self):
++
++        return self._player_command(
++            "Next",
++            "Siguiente",
++            "No pude cambiar de pista",
++        )
++
++
++    def previous_track(self):
++
++        return self._player_command(
++            "Previous",
++            "Anterior",
++            "No pude cambiar de pista",
++        )
++
++
++    def stop_media(self):
++
++        return self._player_command(
++            "Stop",
++            "Reproducción detenida",
++            "No pude detener la reproducción",
++        )
++
++
++    # =====================================================
++    # VOLUMEN (wpctl / PipeWire)
++    # =====================================================
++
++    @staticmethod
++    def _wpctl(*arguments):
++
++        result = subprocess.run(
++            ["wpctl", *arguments],
++            capture_output=True,
++            text=True,
++            timeout=5,
++        )
++
++        if result.returncode != 0:
++            raise RuntimeError(
++                (result.stderr or result.stdout or "wpctl falló").strip()
++            )
++
++        return result.stdout
++
++
++    def _read_volume(self):
++        """Devuelve (porcentaje, silenciado)."""
++
++        output = self._wpctl("get-volume", DEFAULT_SINK)
++        match = re.search(r"Volume:\s*([0-9.]+)", output)
++
++        if not match:
++            raise RuntimeError(f"Respuesta inesperada de wpctl: {output!r}")
++
++        percent = int(round(float(match.group(1)) * 100))
++
++        return percent, "[MUTED]" in output
++
++
++    def _write_volume(self, percent):
++
++        percent = max(0, min(int(round(percent)), 100))
++
++        # -l 1.0: nunca por encima del 100 %.
++        self._wpctl("set-volume", "-l", "1.0", DEFAULT_SINK, f"{percent}%")
++
++        if percent > 0:
++            self._wpctl("set-mute", DEFAULT_SINK, "0")
++
++        return self._read_volume()[0]
++
++
++    def volume_up(self, steps=2):
++
++        return self._step_volume(steps, +1, "Subiendo volumen")
++
++
++    def volume_down(self, steps=2):
++
++        return self._step_volume(steps, -1, "Bajando volumen")
++
++
++    def _step_volume(self, steps, sign, message):
++
++        try:
++            steps = max(1, min(int(steps), 20))
++        except Exception:
++            steps = 2
++
++        try:
++            current, _muted = self._read_volume()
++            self._write_volume(current + sign * steps * VOLUME_STEP_PERCENT)
++            return True, message
++
++        except Exception as error:
++            print("Error cambiando volumen:", repr(error))
++            return False, "No pude cambiar el volumen"
++
++
++    def toggle_mute(self):
++
++        try:
++            self._wpctl("set-mute", DEFAULT_SINK, "toggle")
++            return True, "Silencio alternado"
++
++        except Exception as error:
++            print("Error alternando silencio:", repr(error))
++            return False, "No pude cambiar el silencio"
++
++
++    def set_volume(self, percent):
++
++        try:
++            percent = int(round(float(percent)))
++            actual = self._write_volume(percent)
++
++            print(f"Volumen solicitado: {percent}%")
++            print(f"Volumen real: {actual}%")
++
++            return True, f"Volumen al {actual}%"
++
++        except Exception as error:
++            print("")
++            print("ERROR ESTABLECIENDO VOLUMEN:")
++            print(repr(error))
++
++            return False, "No pude establecer el volumen"
++
++
++    def get_volume(self):
++
++        try:
++            percent, muted = self._read_volume()
++
++            if muted:
++                return True, f"El volumen está al {percent}% y está silenciado"
++
++            return True, f"El volumen está al {percent}%"
++
++        except Exception as error:
++            print("Error obteniendo volumen:", repr(error))
++            return False, "No pude consultar el volumen"
++
++
++    def change_volume(self, amount):
++
++        try:
++            current, _muted = self._read_volume()
++            actual = self._write_volume(current + float(amount))
++            return True, f"Volumen al {actual}%"
++
++        except Exception as error:
++            print("Error cambiando volumen:", repr(error))
++            return False, "No pude cambiar el volumen"
++
++
++    def mute(self):
++
++        try:
++            self._wpctl("set-mute", DEFAULT_SINK, "1")
++            return True, "PC silenciada"
++
++        except Exception as error:
++            print("Error silenciando:", repr(error))
++            return False, "No pude silenciar la PC"
++
++
++    def unmute(self):
++
++        try:
++            self._wpctl("set-mute", DEFAULT_SINK, "0")
++            return True, "Sonido activado"
++
++        except Exception as error:
++            print("Error activando sonido:", repr(error))
++            return False, "No pude activar el sonido"
+diff --git a/mochi-desktop - V0.3/linux_platform/win32_compat.py b/mochi-desktop - V0.3/linux_platform/win32_compat.py
+new file mode 100644
+index 0000000..e4856e7
+--- /dev/null
++++ b/mochi-desktop - V0.3/linux_platform/win32_compat.py	
+@@ -0,0 +1,73 @@
++"""
++Lo poco de win32gui / win32con que usa window_manager.py,
++implementado sobre KWin. Así window_manager.py queda igual en
++Windows y en Linux: solo cambia de dónde importa.
++
++En Linux el "hwnd" de una ventana es el internalId de KWin
++(un UUID en texto).
++"""
++
++from linux_platform import kwin
++
++
++# =========================================================
++# CONSTANTES (win32con)
++# =========================================================
++
++SW_SHOW = 5
++SW_MINIMIZE = 6
++SW_MAXIMIZE = 3
++SW_RESTORE = 9
++
++WM_CLOSE = 0x0010
++
++
++_SHOW_ACTIONS = {
++    SW_SHOW: "restore",
++    SW_MINIMIZE: "minimize",
++    SW_MAXIMIZE: "maximize",
++    SW_RESTORE: "restore",
++}
++
++
++# =========================================================
++# FUNCIONES (win32gui)
++# =========================================================
++
++def _check(found, hwnd):
++
++    if not found:
++        raise kwin.KWinError(f"La ventana {hwnd} ya no existe")
++
++
++def IsIconic(hwnd):
++
++    return kwin.is_minimized(hwnd)
++
++
++def ShowWindow(hwnd, command):
++
++    action = _SHOW_ACTIONS.get(command)
++
++    if action is None:
++        raise ValueError(f"ShowWindow: comando no soportado ({command})")
++
++    _check(kwin.window_action(hwnd, action), hwnd)
++
++
++def SetForegroundWindow(hwnd):
++
++    _check(kwin.window_action(hwnd, "focus"), hwnd)
++
++
++def GetForegroundWindow():
++
++    return kwin.active_window_id()
++
++
++def PostMessage(hwnd, message, _wparam=0, _lparam=0):
++
++    if message != WM_CLOSE:
++        raise ValueError(f"PostMessage: mensaje no soportado ({message})")
++
++    _check(kwin.window_action(hwnd, "close"), hwnd)
+diff --git a/mochi-desktop - V0.3/linux_platform/windows.py b/mochi-desktop - V0.3/linux_platform/windows.py
+new file mode 100644
+index 0000000..e71a9b9
+--- /dev/null
++++ b/mochi-desktop - V0.3/linux_platform/windows.py	
+@@ -0,0 +1,90 @@
++"""
++Descubrimiento de ventanas en Linux (KWin). Devuelve la misma
++forma de diccionario que discovery/windows.py en Windows.
++"""
++
++import psutil
++
++from linux_platform import kwin
++
++
++def discover_windows(normalize_window_name):
++
++    windows = []
++
++    try:
++        kwin_windows = kwin.list_windows()
++
++    except kwin.KWinError as error:
++        print("No pude listar las ventanas de KWin:", error)
++        return windows
++
++
++    for item in kwin_windows:
++
++        title = str(item.get("title") or "").strip()
++
++        # Igual que en Windows: sin título no se puede nombrar.
++        if not title:
++            continue
++
++
++        pid = int(item.get("pid") or 0)
++
++        process_name = ""
++        executable = ""
++
++        try:
++            process = psutil.Process(pid)
++            process_name = process.name().strip()
++
++            try:
++                executable = process.exe()
++            except Exception:
++                executable = ""
++
++        except Exception:
++            pass
++
++
++        # Si el proceso no tiene un nombre útil (flatpak, wrappers),
++        # se usa la clase de la ventana (firefox, org.kde.dolphin...).
++        if not process_name:
++            process_name = str(item.get("resource_class") or "")
++
++
++        windows.append({
++
++            "hwnd":
++                item["id"],
++
++            "title":
++                title,
++
++            "normalized_title":
++                normalize_window_name(title),
++
++            "pid":
++                pid,
++
++            "process":
++                process_name,
++
++            "normalized_process":
++                normalize_window_name(process_name),
++
++            "executable":
++                executable,
++
++            "window_class":
++                str(item.get("resource_class") or ""),
++
++            "minimized":
++                bool(item.get("minimized")),
++
++            "active":
++                bool(item.get("active")),
++        })
++
++
++    return windows
+diff --git a/mochi-desktop - V0.3/media_controller.py b/mochi-desktop - V0.3/media_controller.py
+index 68cd56e..8dd9d6c 100644
+--- a/mochi-desktop - V0.3/media_controller.py	
++++ b/mochi-desktop - V0.3/media_controller.py	
+@@ -1,5 +1,6 @@
+ import ctypes
+ import asyncio
++import os
+ from difflib import SequenceMatcher
+ from datetime import datetime, timezone
+ import time
+@@ -984,4 +985,11 @@ class MediaController:
+             )
+ 
+ 
+-media_controller = MediaController()
++if os.name == "nt":
++    media_controller = MediaController()
++
++else:
++    # Linux: MPRIS para las sesiones y wpctl para el volumen.
++    from linux_platform.media import LinuxMediaController
++
++    media_controller = LinuxMediaController()
+diff --git a/mochi-desktop - V0.3/mochi_command_service.py b/mochi-desktop - V0.3/mochi_command_service.py
+index 2945f42..d0b9464 100644
+--- a/mochi-desktop - V0.3/mochi_command_service.py	
++++ b/mochi-desktop - V0.3/mochi_command_service.py	
+@@ -51,6 +51,7 @@ class MochiCommandService:
+         source="unknown",
+         debug=False,
+         verbose=False,
++        reply_hint=None,
+     ):
+         """
+         Ejecuta una orden completa mediante el Agent Loop.
+@@ -65,6 +66,10 @@ class MochiCommandService:
+ 
+         debug=True:
+             devuelve también actions y goal_state.
++
++        reply_hint:
++            indicación para la respuesta final (el puente de voz pide
++            respuestas cortas y sin formato).
+         """
+ 
+         command = self._clean_text(text)
+@@ -82,12 +87,19 @@ class MochiCommandService:
+         try:
+             with self._execution_lock:
+ 
+-                result = self.agent.run(
+-                    user_command=command,
+-                    registry=self.registry,
+-                    mode="auto",
+-                    verbose=verbose,
+-                )
++                run_arguments = {
++                    "user_command": command,
++                    "registry": self.registry,
++                    "mode": "auto",
++                    "verbose": verbose,
++                }
++
++                # Solo se pasa si se pidió: los agentes de prueba
++                # no tienen este parámetro.
++                if reply_hint:
++                    run_arguments["reply_hint"] = reply_hint
++
++                result = self.agent.run(**run_arguments)
+ 
+         except Exception as error:
+ 
+diff --git a/mochi-desktop - V0.3/requirements-linux.txt b/mochi-desktop - V0.3/requirements-linux.txt
+new file mode 100644
+index 0000000..85cea4e
+--- /dev/null
++++ b/mochi-desktop - V0.3/requirements-linux.txt	
+@@ -0,0 +1,11 @@
++# Mochi Desktop en Linux (KDE Plasma / Wayland).
++# Además: requirements-voice.txt para el puente con el ESP32.
++#
++# Programas del sistema que usa (Debian 13 + KDE ya los trae):
++#   wpctl (PipeWire), wl-copy / wl-paste, spectacle, gtk-launch, xdg-open
++psutil==7.2.2
++jeepney==0.9.0
++yt-dlp==2026.8.19
++
++# Opcional: Whisper como alternativa a Vosk (--stt whisper).
++# faster-whisper==1.2.1
+diff --git a/mochi-desktop - V0.3/requirements-voice.txt b/mochi-desktop - V0.3/requirements-voice.txt
+new file mode 100644
+index 0000000..dbde151
+--- /dev/null
++++ b/mochi-desktop - V0.3/requirements-voice.txt	
+@@ -0,0 +1,4 @@
++# Puente de voz ESP32 (voice_bridge/)
++pyserial==3.5
++vosk==0.3.45
++piper-tts==1.8.0
+diff --git a/mochi-desktop - V0.3/tests/test_phase1_capabilities.py b/mochi-desktop - V0.3/tests/test_phase1_capabilities.py
+index c5dc22f..bf7d8e2 100644
+--- a/mochi-desktop - V0.3/tests/test_phase1_capabilities.py	
++++ b/mochi-desktop - V0.3/tests/test_phase1_capabilities.py	
+@@ -2924,7 +2924,7 @@ class RegistryTests(unittest.TestCase):
+     def test_screenshot_and_notification_return_honest_dispatch_metadata(self):
+         with patch("brain.mochi_tools.desktop_tools.capture_screenshot", return_value=(True, Path("C:/capture.png"))):
+             screenshot = capture_screenshot("capture")
+-        self.assertEqual(screenshot["path"], "C:\\capture.png")
++        self.assertEqual(screenshot["path"], str(Path("C:/capture.png")))
+ 
+         with patch("brain.mochi_tools.desktop_tools.show_notification", return_value=(True, "Orden de notificación enviada a Windows.")):
+             notification = show_notification("Mochi", "Prueba")
+diff --git a/mochi-desktop - V0.3/tests/test_voice_and_cache.py b/mochi-desktop - V0.3/tests/test_voice_and_cache.py
+new file mode 100644
+index 0000000..81cde42
+--- /dev/null
++++ b/mochi-desktop - V0.3/tests/test_voice_and_cache.py	
+@@ -0,0 +1,122 @@
++import unittest
++
++from brain.brain_provider import BrainResult
++from brain.brain_router import BrainRouter
++from mochi_command_service import MochiCommandService
++from voice_bridge.speech import to_speech_text
++
++
++# =========================================================
++# TEXTO PARA HABLAR
++# =========================================================
++
++class SpeechTextTests(unittest.TestCase):
++
++    def test_removes_markdown_lists_and_pids(self):
++        text = (
++            "Tenés 2 ventanas abiertas:\n"
++            "1. **ROBOTICA — Dolphin** (PID: 2114)\n"
++            "2. **media_controller.py - Visual Studio Code** (PID: 2115)"
++        )
++        self.assertEqual(
++            to_speech_text(text),
++            "Tenés 2 ventanas abiertas: ROBOTICA — Dolphin. "
++            "media_controller.py - Visual Studio Code.",
++        )
++
++    def test_cuts_long_text_at_sentence(self):
++        first = "Esta es la primera oración y es bastante completa."
++        text = f"{first} " + "palabra " * 80
++        self.assertEqual(to_speech_text(text, limit=100), first)
++
++    def test_cuts_at_word_when_no_sentence_fits(self):
++        text = "palabra " * 80
++        self.assertEqual(to_speech_text(text, limit=30), "palabra palabra palabra...")
++
++    def test_short_text_is_unchanged(self):
++        self.assertEqual(to_speech_text("Volumen al 50 %."), "Volumen al 50 %.")
++
++
++# =========================================================
++# INDICACIÓN DE RESPUESTA (puente de voz)
++# =========================================================
++
++class ReplyHintTests(unittest.TestCase):
++
++    class Agent:
++        def __init__(self):
++            self.calls = []
++
++        def run(self, **kwargs):
++            self.calls.append(kwargs)
++            return {"ok": True, "text": "listo"}
++
++    def test_reply_hint_reaches_agent_only_when_given(self):
++        agent = self.Agent()
++        service = MochiCommandService(agent=agent, registry=object())
++
++        service.execute("subí el volumen", source="esp32", reply_hint="corto")
++        service.execute("subí el volumen", source="android")
++
++        self.assertEqual(agent.calls[0]["reply_hint"], "corto")
++        self.assertNotIn("reply_hint", agent.calls[1])
++
++
++# =========================================================
++# DEEP CON LA MISMA LISTA DE TOOLS (caché de llama-server)
++# =========================================================
++
++class StableToolsTests(unittest.TestCase):
++
++    class Provider:
++        prefers_stable_tools = True
++
++        def __init__(self, tool_calls):
++            self.tool_calls = tool_calls
++            self.sent_tools = []
++
++        def generate(self, messages, tools=None, options=None):
++            self.sent_tools.append([tool["function"]["name"] for tool in tools])
++            return BrainResult(True, tool_calls=list(self.tool_calls))
++
++    @staticmethod
++    def _tool(name):
++        return {"type": "function", "function": {"name": name, "parameters": {}}}
++
++    def _router(self, provider):
++        router = BrainRouter.__new__(BrainRouter)
++        router.provider = provider
++        router.last_mode = None
++        return router
++
++    def test_deep_sends_same_tools_as_auto(self):
++        provider = self.Provider([])
++        router = self._router(provider)
++        tools = [self._tool("get_system_volume")]
++
++        router.generate(messages=[], tools=tools, mode="auto")
++        router.generate(messages=[], tools=tools, mode="deep")
++
++        self.assertEqual(
++            provider.sent_tools[0],
++            ["get_system_volume", "request_deep_reasoning"],
++        )
++        self.assertEqual(provider.sent_tools[1], provider.sent_tools[0])
++
++    def test_deep_drops_repeated_deep_request(self):
++        provider = self.Provider([
++            {"function": {"name": "request_deep_reasoning", "arguments": {}}},
++            {"function": {"name": "get_system_volume", "arguments": {}}},
++        ])
++        router = self._router(provider)
++
++        result = router.deep(messages=[], tools=[self._tool("get_system_volume")])
++
++        self.assertEqual(
++            [call["function"]["name"] for call in result.tool_calls],
++            ["get_system_volume"],
++        )
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/mochi-desktop - V0.3/voice_bridge/__init__.py b/mochi-desktop - V0.3/voice_bridge/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/mochi-desktop - V0.3/voice_bridge/esp32_bridge.py b/mochi-desktop - V0.3/voice_bridge/esp32_bridge.py
+new file mode 100644
+index 0000000..226eeb3
+--- /dev/null
++++ b/mochi-desktop - V0.3/voice_bridge/esp32_bridge.py	
+@@ -0,0 +1,433 @@
++"""
++Puente de voz ESP32 <-> Mochi Desktop.
++
++voz -> ESP32 -> USB -> (este puente) Vosk -> command_service
++    -> LLM en la PC -> herramienta -> respuesta -> Piper -> ESP32
++
++Uso (desde la carpeta de mochi-desktop):
++
++    python -m voice_bridge.esp32_bridge
++    python -m voice_bridge.esp32_bridge --port COM5
++    python -m voice_bridge.esp32_bridge --echo     # sin LLM, repite lo que oyó
++    python -m voice_bridge.esp32_bridge --list     # puertos disponibles
++"""
++
++import argparse
++import queue
++import threading
++import time
++import traceback
++import wave
++from pathlib import Path
++
++import serial
++from serial.tools import list_ports
++
++from voice_bridge import protocol
++from voice_bridge.speech import (
++    SpeechToText,
++    TextToSpeech,
++    WhisperSpeechToText,
++    to_display_text,
++    to_speech_text,
++)
++
++
++ESPRESSIF_VID = 0x303A
++
++BRIDGE_DIR = Path(__file__).resolve().parent
++DEFAULT_VOSK_MODEL = BRIDGE_DIR / "models" / "vosk-model-small-es-0.42"
++DEFAULT_PIPER_VOICE = BRIDGE_DIR / "models" / "es_AR-daniela-high.onnx"
++
++HEARTBEAT_SECONDS = 5
++PLAY_CHUNK_BYTES = 2048
++
++# Menos que esto (en segundos) se considera un toque accidental.
++MIN_AUDIO_SECONDS = 0.3
++
++# Se agrega al final de cada orden hablada. Respuestas cortas: la
++# RX 580 genera ~12 tokens/s y cada oración son segundos de audio.
++#
++# Ojo: una indicación del tipo "respondé en una oración" hace que
++# el modelo conteste sin usar herramientas (e invente). Por eso
++# aclara que las herramientas se usan igual que siempre.
++VOICE_REPLY_HINT = (
++    "orden dictada por voz; puede tener errores de transcripción. "
++    "Usá las herramientas igual que siempre. Solo cuando termines, "
++    "la respuesta final se lee en voz alta: que sea corta, sin listas "
++    "ni formato"
++)
++
++
++# =========================================================
++# PUERTO SERIE
++# =========================================================
++
++def find_esp32_port():
++
++    for port in list_ports.comports():
++        if port.vid == ESPRESSIF_VID:
++            return port.device
++
++    return None
++
++
++class Esp32Link:
++    """Conexión serie con el ESP32. Seguro para usar desde varios hilos."""
++
++    def __init__(self, port):
++
++        # En USB nativo la velocidad se ignora.
++        self.serial = serial.Serial(port, 921600, timeout=0.1)
++        self._write_lock = threading.Lock()
++
++
++    def send(self, msg_type, payload=b""):
++
++        with self._write_lock:
++            self.serial.write(protocol.encode(msg_type, payload))
++
++
++    def state(self, value):
++
++        self.send(protocol.STATE, bytes([value]))
++
++
++    def text(self, value):
++
++        self.send(protocol.TEXT, to_display_text(value).encode("ascii"))
++
++
++    def beep(self, hz, ms):
++
++        self.send(protocol.BEEP, hz.to_bytes(2, "little") + ms.to_bytes(2, "little"))
++
++
++    def play(self, pcm, sample_rate):
++
++        self.send(protocol.PLAY_BEGIN, protocol.u32(sample_rate))
++
++        for start in range(0, len(pcm), PLAY_CHUNK_BYTES):
++            self.send(protocol.PLAY_DATA, pcm[start:start + PLAY_CHUNK_BYTES])
++
++        self.send(protocol.PLAY_END)
++
++
++    def read(self):
++
++        return self.serial.read(self.serial.in_waiting or 1)
++
++
++# =========================================================
++# EJECUCIÓN DE ÓRDENES
++# =========================================================
++
++def create_executor(echo):
++
++    if echo:
++
++        def run_echo(text):
++            return {"ok": True, "text": f"Escuché: {text}"}
++
++        return run_echo
++
++
++    # Se importa recién acá: carga todo Mochi Desktop
++    # (herramientas, Brain, conexión con el LLM).
++    from mochi_command_service import command_service
++
++    threading.Thread(
++        target=warm_up_llm,
++        args=(command_service,),
++        daemon=True,
++    ).start()
++
++    def run_command(text):
++        return command_service.execute(
++            text=text,
++            source="esp32",
++            verbose=True,
++            reply_hint=VOICE_REPLY_HINT,
++        )
++
++    return run_command
++
++
++def warm_up_llm(command_service):
++    """
++    Procesa una vez el prompt de sistema + herramientas (~4.700
++    tokens) para que llama-server lo deje en caché. Sin esto, la
++    primera orden tarda ~25 s extra en la RX 580.
++    """
++
++    from brain.agent_loop import AGENT_SYSTEM_PROMPT
++
++    started = time.monotonic()
++
++    try:
++        router = command_service.agent.router
++
++        # Las mismas tools que manda el modo "auto" del router (las
++        # reales + request_deep_reasoning, al final). Si difieren,
++        # la caché no sirve y la primera orden tarda ~80 s.
++        tools = (
++            command_service.registry.get_tool_schemas()
++            + [router._deep_request_tool()]
++        )
++
++        result = router.fast(
++            messages=[
++                {"role": "system", "content": AGENT_SYSTEM_PROMPT},
++                {"role": "user", "content": "hola"},
++            ],
++            tools=tools,
++            options={"num_predict": 1},
++        )
++    except Exception as error:
++        print(f"[llm] no pude precalentar: {error}")
++        return
++
++    if result.success:
++        print(f"[llm] listo ({time.monotonic() - started:.1f} s)")
++    else:
++        print(f"[llm] no responde: {result.error}")
++
++
++# =========================================================
++# PUENTE
++# =========================================================
++
++class VoiceBridge:
++
++    def __init__(self, link, stt, tts, execute, save_dir=None):
++
++        self.link = link
++        self.stt = stt
++        self.tts = tts
++        self.execute = execute
++        self.save_dir = save_dir
++
++        self.reader = protocol.FrameReader()
++        self.utterances = queue.Queue()
++
++        self._audio = bytearray()
++        self._audio_rate = 16000
++        self._recording = False
++        self._connected = False
++
++
++    # =====================================================
++    # HILO DE TRABAJO: una orden por vez
++    # =====================================================
++
++    def _worker(self):
++
++        while True:
++            pcm, rate = self.utterances.get()
++
++            try:
++                self._handle_utterance(pcm, rate)
++            except Exception:
++                traceback.print_exc()
++                self.link.state(protocol.ERROR)
++                self.link.text("Error interno del puente")
++
++
++    def _speak(self, text):
++
++        if not text or self.tts is None:
++            return
++
++        speech = to_speech_text(text)
++
++        if not speech:
++            return
++
++        pcm = self.tts.synthesize(speech)
++        self.link.play(pcm, self.tts.sample_rate)
++
++
++    def _handle_utterance(self, pcm, rate):
++
++        seconds = len(pcm) / 2 / rate
++
++        if seconds < MIN_AUDIO_SECONDS:
++            self.link.state(protocol.IDLE)
++            return
++
++        if self.save_dir:
++            self._save_wav(pcm, rate)
++
++        self.link.state(protocol.THINKING)
++
++        started = time.monotonic()
++        text = self.stt.transcribe(pcm, rate)
++        print(f"\n[voz] {seconds:.1f} s -> \"{text}\" ({time.monotonic() - started:.2f} s)")
++
++        if not text:
++            self.link.state(protocol.ERROR)
++            self.link.text("No te entendi")
++            self._speak("No te entendí.")
++            return
++
++        self.link.text(f"> {text}")
++
++        started = time.monotonic()
++        result = self.execute(text)
++        reply = (result.get("text") or "").strip()
++        print(f"[mochi] {result.get('status')} -> \"{reply}\" ({time.monotonic() - started:.2f} s)")
++
++        if reply:
++            self.link.text(to_speech_text(reply))
++            self.link.state(protocol.SPEAKING)
++            self._speak(reply)
++
++        self.link.state(protocol.DONE if result.get("ok") else protocol.ERROR)
++
++
++    def _save_wav(self, pcm, rate):
++
++        self.save_dir.mkdir(parents=True, exist_ok=True)
++        path = self.save_dir / time.strftime("mochi-%Y%m%d-%H%M%S.wav")
++
++        with wave.open(str(path), "wb") as wav:
++            wav.setnchannels(1)
++            wav.setsampwidth(2)
++            wav.setframerate(rate)
++            wav.writeframes(pcm)
++
++        print(f"[voz] guardado {path}")
++
++
++    # =====================================================
++    # TRAMAS DEL ESP32
++    # =====================================================
++
++    def _on_frame(self, msg_type, payload):
++
++        if msg_type == protocol.HELLO:
++            # El ESP32 contesta cada latido: se avisa solo la primera vez.
++            if not self._connected:
++                print(f"[esp32] conectado: {payload.decode('utf-8', 'replace')}")
++                self._connected = True
++            return
++
++        if msg_type == protocol.LOG:
++            print(f"[esp32] {payload.decode('utf-8', 'replace')}")
++            return
++
++        if msg_type == protocol.AUDIO_BEGIN:
++            self._audio = bytearray()
++            self._audio_rate = int.from_bytes(payload[:4], "little") or 16000
++            self._recording = True
++            print("[voz] escuchando...", end="", flush=True)
++            return
++
++        if msg_type == protocol.AUDIO_DATA and self._recording:
++            self._audio.extend(payload)
++            return
++
++        if msg_type == protocol.AUDIO_END and self._recording:
++            self._recording = False
++            self.utterances.put((bytes(self._audio), self._audio_rate))
++
++
++    # =====================================================
++    # BUCLE PRINCIPAL
++    # =====================================================
++
++    def run(self):
++
++        threading.Thread(target=self._worker, daemon=True).start()
++
++        self.link.send(protocol.HELLO_REQUEST)
++        self.link.state(protocol.IDLE)
++        last_heartbeat = time.monotonic()
++
++        print("Puente listo. Apretá el botón del ESP32 para hablar (Ctrl+C para salir).")
++
++        while True:
++            for msg_type, payload in self.reader.feed(self.link.read()):
++                self._on_frame(msg_type, payload)
++
++            # Le avisa al ESP32 que la notebook sigue ahí.
++            if time.monotonic() - last_heartbeat > HEARTBEAT_SECONDS:
++                self.link.send(protocol.HELLO_REQUEST)
++                last_heartbeat = time.monotonic()
++
++
++# =========================================================
++# MAIN
++# =========================================================
++
++def main():
++
++    parser = argparse.ArgumentParser(description="Puente de voz ESP32 <-> Mochi")
++    parser.add_argument("--port", help="puerto serie del ESP32 (por defecto, autodetectar)")
++    parser.add_argument("--list", action="store_true", help="listar puertos serie y salir")
++    parser.add_argument("--echo", action="store_true", help="no ejecutar órdenes: solo repetir lo que oyó")
++    parser.add_argument("--no-tts", action="store_true", help="no hablar, solo mostrar texto")
++    parser.add_argument("--stt", choices=["vosk", "whisper"], default="vosk", help="motor de voz a texto")
++    parser.add_argument("--whisper-model", default="small", help="tamaño de Whisper: base, small...")
++    parser.add_argument("--vosk-model", default=str(DEFAULT_VOSK_MODEL))
++    parser.add_argument("--piper-voice", default=str(DEFAULT_PIPER_VOICE))
++    parser.add_argument("--save-wav", metavar="CARPETA", help="guardar cada grabación (para ajustar el micrófono)")
++    args = parser.parse_args()
++
++    if args.list:
++        for port in list_ports.comports():
++            vid = f"{port.vid:04X}" if port.vid is not None else "----"
++            print(f"{port.device}  VID={vid}  {port.description}")
++        return
++
++    port = args.port or find_esp32_port()
++    if not port:
++        raise SystemExit("No encontré el ESP32. Conectalo al puerto USB (no UART) o usá --port. Ver --list.")
++
++    if args.stt == "whisper":
++        print(f"Cargando Whisper: {args.whisper_model}")
++        stt = WhisperSpeechToText(args.whisper_model)
++    else:
++        print(f"Cargando Vosk: {args.vosk_model}")
++        stt = SpeechToText(args.vosk_model)
++
++    tts = None
++    if not args.no_tts:
++        try:
++            print(f"Cargando Piper: {args.piper_voice}")
++            tts = TextToSpeech(args.piper_voice)
++        except Exception as error:
++            print(f"Sin voz ({error}). Sigo solo con texto en pantalla.")
++
++    execute = create_executor(args.echo)
++
++    print(f"Abriendo {port}")
++
++    try:
++        link = Esp32Link(port)
++
++    except serial.SerialException as error:
++        # Linux: sin la regla udev el puerto es solo de root/dialout.
++        if "Permission denied" in str(error) or "Permiso denegado" in str(error):
++            raise SystemExit(
++                f"Sin permiso para abrir {port}. Instalá la regla udev "
++                "(linux/99-mochi-esp32.rules, ver README.md) y reconectá el ESP32."
++            ) from error
++        raise
++
++    bridge = VoiceBridge(
++        link,
++        stt,
++        tts,
++        execute,
++        save_dir=Path(args.save_wav) if args.save_wav else None,
++    )
++
++    try:
++        bridge.run()
++    except KeyboardInterrupt:
++        print("\nCerrando puente.")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/mochi-desktop - V0.3/voice_bridge/protocol.py b/mochi-desktop - V0.3/voice_bridge/protocol.py
+new file mode 100644
+index 0000000..5634898
+--- /dev/null
++++ b/mochi-desktop - V0.3/voice_bridge/protocol.py	
+@@ -0,0 +1,99 @@
++"""
++Protocolo serie ESP32 <-> notebook.
++
++Trama: A5 5A | tipo (u8) | largo (u16 LE) | payload
++
++La misma tabla está en firmware/mochi-esp32/src/protocol.h:
++si se cambia acá, cambiarla allá.
++"""
++
++import struct
++
++
++MAGIC = b"\xA5\x5A"
++MAX_PAYLOAD = 8192
++
++
++# ESP32 -> notebook
++HELLO = 0x01
++AUDIO_BEGIN = 0x10
++AUDIO_DATA = 0x11
++AUDIO_END = 0x12
++LOG = 0x7F
++
++# notebook -> ESP32
++HELLO_REQUEST = 0x02
++STATE = 0x20
++TEXT = 0x21
++PLAY_BEGIN = 0x30
++PLAY_DATA = 0x31
++PLAY_END = 0x32
++BEEP = 0x33
++
++
++# Estados que muestra la cara.
++IDLE = 0
++LISTENING = 1
++THINKING = 2
++SPEAKING = 3
++DONE = 4
++ERROR = 5
++
++
++def encode(msg_type, payload=b""):
++
++    if len(payload) > MAX_PAYLOAD:
++        raise ValueError("payload demasiado grande")
++
++    return MAGIC + struct.pack("<BH", msg_type, len(payload)) + payload
++
++
++def u32(value):
++
++    return struct.pack("<I", value)
++
++
++class FrameReader:
++    """Arma tramas a partir de bytes sueltos del puerto serie."""
++
++    def __init__(self):
++
++        self.buffer = bytearray()
++
++
++    def feed(self, data):
++
++        self.buffer.extend(data)
++        frames = []
++
++        while True:
++
++            start = self.buffer.find(MAGIC)
++
++            if start < 0:
++                # Conserva un posible A5 suelto al final.
++                del self.buffer[:-1]
++                break
++
++            if start > 0:
++                # Bytes que no son tramas (por ejemplo, logs del
++                # bootloader al reiniciar el ESP32).
++                del self.buffer[:start]
++
++            if len(self.buffer) < 5:
++                break
++
++            msg_type, length = struct.unpack_from("<BH", self.buffer, 2)
++
++            if length > MAX_PAYLOAD:
++                del self.buffer[:2]
++                continue
++
++            if len(self.buffer) < 5 + length:
++                break
++
++            payload = bytes(self.buffer[5:5 + length])
++            del self.buffer[:5 + length]
++            frames.append((msg_type, payload))
++
++        return frames
+diff --git a/mochi-desktop - V0.3/voice_bridge/simulador.py b/mochi-desktop - V0.3/voice_bridge/simulador.py
+new file mode 100644
+index 0000000..c670307
+--- /dev/null
++++ b/mochi-desktop - V0.3/voice_bridge/simulador.py	
+@@ -0,0 +1,187 @@
++"""
++ESP32 simulado: prueba el puente sin la placa.
++
++Crea un puerto serie falso (pty), arranca el puente apuntando a ese
++puerto, "dice" una frase sintetizada con Piper y muestra lo que el
++puente le devuelve al ESP32 (estados, texto, audio).
++
++Solo Linux (usa os.openpty). Desde la carpeta de mochi-desktop:
++
++    python -m voice_bridge.simulador "qué ventanas tengo abiertas"
++    python -m voice_bridge.simulador "hola" --echo
++    python -m voice_bridge.simulador "hola" --echo --stt whisper
++
++Lo que va después de la frase se le pasa al puente tal cual.
++"""
++
++import os
++import select
++import subprocess
++import sys
++import time
++import tty
++from pathlib import Path
++
++import numpy as np
++
++from voice_bridge import protocol
++from voice_bridge.esp32_bridge import DEFAULT_PIPER_VOICE
++from voice_bridge.speech import TextToSpeech
++
++
++MOCHI_DIR = Path(__file__).resolve().parent.parent
++
++STATES = {
++    protocol.IDLE: "IDLE",
++    protocol.LISTENING: "LISTENING",
++    protocol.THINKING: "THINKING",
++    protocol.SPEAKING: "SPEAKING",
++    protocol.DONE: "DONE",
++    protocol.ERROR: "ERROR",
++}
++
++
++def synthesize_16k(text):
++    """Frase de Piper pasada a PCM 16 kHz, con silencio alrededor."""
++
++    tts = TextToSpeech(DEFAULT_PIPER_VOICE)
++    pcm = np.frombuffer(tts.synthesize(text), dtype=np.int16).astype(np.float32)
++
++    positions = np.linspace(0, len(pcm) - 1, int(len(pcm) * 16000 / tts.sample_rate))
++    pcm = np.interp(positions, np.arange(len(pcm)), pcm).astype(np.int16)
++
++    silence = np.zeros(4000, dtype=np.int16)
++
++    return np.concatenate([silence, pcm, silence]).tobytes()
++
++
++class FakeEsp32:
++
++    def __init__(self, master, bridge):
++
++        self.master = master
++        self.bridge = bridge
++        self.reader = protocol.FrameReader()
++        self.audio_bytes = 0
++        self.audio_rate = 22050
++
++
++    def _show_bridge_output(self):
++
++        try:
++            output = self.bridge.stdout.read()
++        except TypeError:
++            return
++
++        for line in (output or "").splitlines():
++            if line.strip():
++                print(f"  [puente] {line}")
++
++
++    def pump(self, seconds, until=None):
++        """Atiende el puerto hasta `until(tipo, payload)` o hasta el tiempo."""
++
++        end = time.monotonic() + seconds
++
++        while time.monotonic() < end:
++
++            self._show_bridge_output()
++
++            if self.bridge.poll() is not None:
++                self._show_bridge_output()
++                raise SystemExit("El puente terminó.")
++
++            ready, _, _ = select.select([self.master], [], [], 0.1)
++
++            if not ready:
++                continue
++
++            for msg_type, payload in self.reader.feed(os.read(self.master, 65536)):
++
++                if msg_type == protocol.HELLO_REQUEST:
++                    os.write(self.master, protocol.encode(protocol.HELLO, b"mochi-esp32 simulado"))
++
++                elif msg_type == protocol.STATE:
++                    print(f"  <- estado {STATES.get(payload[0], payload[0])}")
++
++                elif msg_type == protocol.TEXT:
++                    print(f"  <- pantalla {payload.decode('ascii', 'replace')!r}")
++
++                elif msg_type == protocol.PLAY_BEGIN:
++                    self.audio_bytes = 0
++                    self.audio_rate = int.from_bytes(payload[:4], "little") or 22050
++
++                elif msg_type == protocol.PLAY_DATA:
++                    self.audio_bytes += len(payload)
++
++                elif msg_type == protocol.PLAY_END:
++                    print(f"  <- audio {self.audio_bytes / 2 / self.audio_rate:.1f} s")
++
++                if until and until(msg_type, payload):
++                    return True
++
++        return False
++
++
++    def say(self, pcm):
++
++        os.write(self.master, protocol.encode(protocol.AUDIO_BEGIN, protocol.u32(16000)))
++
++        # Mismo ritmo que el ESP32: 256 muestras cada 16 ms.
++        for start in range(0, len(pcm), 512):
++            os.write(self.master, protocol.encode(protocol.AUDIO_DATA, pcm[start:start + 512]))
++            time.sleep(0.004)
++
++        os.write(self.master, protocol.encode(protocol.AUDIO_END))
++
++
++def is_state(*states):
++
++    return lambda msg_type, payload: msg_type == protocol.STATE and payload[0] in states
++
++
++def main():
++
++    if len(sys.argv) < 2:
++        raise SystemExit(__doc__)
++
++    phrase = sys.argv[1]
++    bridge_arguments = sys.argv[2:]
++
++    pcm = synthesize_16k(phrase)
++
++    master, slave = os.openpty()
++    tty.setraw(master)
++    tty.setraw(slave)
++
++    bridge = subprocess.Popen(
++        [sys.executable, "-m", "voice_bridge.esp32_bridge", "--port", os.ttyname(slave), *bridge_arguments],
++        cwd=MOCHI_DIR,
++        env=dict(os.environ, PYTHONUNBUFFERED="1"),
++        stdout=subprocess.PIPE,
++        stderr=subprocess.STDOUT,
++        text=True,
++    )
++    os.set_blocking(bridge.stdout.fileno(), False)
++
++    esp32 = FakeEsp32(master, bridge)
++
++    try:
++        if not esp32.pump(120, until=is_state(protocol.IDLE)):
++            raise SystemExit("El puente no arrancó.")
++
++        print(f"-> digo: {phrase!r} ({len(pcm) / 32000:.1f} s)")
++        esp32.say(pcm)
++
++        started = time.monotonic()
++        esp32.pump(300, until=is_state(protocol.DONE, protocol.ERROR))
++        print(f"-> respuesta completa en {time.monotonic() - started:.1f} s")
++
++        esp32.pump(1.0)
++
++    finally:
++        bridge.terminate()
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/mochi-desktop - V0.3/voice_bridge/speech.py b/mochi-desktop - V0.3/voice_bridge/speech.py
+new file mode 100644
+index 0000000..778bc47
+--- /dev/null
++++ b/mochi-desktop - V0.3/voice_bridge/speech.py	
+@@ -0,0 +1,188 @@
++"""
++Voz a texto (Vosk) y texto a voz (Piper), ambos locales.
++
++Modelos (descargar una vez):
++
++  Vosk:  https://alphacephei.com/vosk/models
++         vosk-model-small-es-0.42  -> descomprimir en models/
++
++  Piper: https://huggingface.co/rhasspy/piper-voices
++         es/es_AR/daniela/high/es_AR-daniela-high.onnx (+ .onnx.json)
++         -> models/
++"""
++
++import json
++import re
++import unicodedata
++from pathlib import Path
++
++
++# =========================================================
++# VOZ A TEXTO
++# =========================================================
++
++class SpeechToText:
++
++    def __init__(self, model_path):
++
++        from vosk import KaldiRecognizer, Model, SetLogLevel
++
++        SetLogLevel(-1)
++
++        if not Path(model_path).exists():
++            raise FileNotFoundError(
++                f"No encuentro el modelo de Vosk en {model_path}"
++            )
++
++        self._model = Model(str(model_path))
++        self._recognizer_class = KaldiRecognizer
++
++
++    def transcribe(self, pcm, sample_rate=16000):
++
++        recognizer = self._recognizer_class(self._model, sample_rate)
++        recognizer.AcceptWaveform(pcm)
++        result = json.loads(recognizer.FinalResult())
++
++        return (result.get("text") or "").strip()
++
++
++# =========================================================
++# VOZ A TEXTO: WHISPER (alternativa a Vosk)
++#
++# Más preciso que vosk-model-small, pero más lento: con "small"
++# tarda ~2 s por frase en la i3 de la notebook. El modelo se
++# descarga solo la primera vez (pip install faster-whisper).
++# =========================================================
++
++# Palabras que se usan seguido con Mochi: ayudan a Whisper a
++# escribirlas bien.
++WHISPER_VOCABULARY = (
++    "Mochi, abrí, cerrá, minimizá, maximizá, pausá, volumen, ventana, "
++    "Firefox, Chrome, YouTube, Netflix, Spotify, carpeta, descargas."
++)
++
++
++class WhisperSpeechToText:
++
++    def __init__(self, model_size="small"):
++
++        from faster_whisper import WhisperModel
++
++        self._model = WhisperModel(
++            model_size,
++            device="cpu",
++            compute_type="int8",
++        )
++
++
++    def transcribe(self, pcm, sample_rate=16000):
++
++        import numpy as np
++
++        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768
++
++        if sample_rate != 16000:
++            positions = np.linspace(0, len(audio) - 1, int(len(audio) * 16000 / sample_rate))
++            audio = np.interp(positions, np.arange(len(audio)), audio).astype(np.float32)
++
++        segments, _info = self._model.transcribe(
++            audio,
++            language="es",
++            beam_size=1,
++            initial_prompt=WHISPER_VOCABULARY,
++            condition_on_previous_text=False,
++        )
++
++        return " ".join(segment.text.strip() for segment in segments).strip()
++
++
++# =========================================================
++# TEXTO A VOZ
++# =========================================================
++
++class TextToSpeech:
++
++    def __init__(self, voice_path):
++
++        from piper import PiperVoice
++
++        if not Path(voice_path).exists():
++            raise FileNotFoundError(
++                f"No encuentro la voz de Piper en {voice_path}"
++            )
++
++        self._voice = PiperVoice.load(str(voice_path))
++        self.sample_rate = self._voice.config.sample_rate
++
++
++    def synthesize(self, text):
++        """Devuelve PCM 16 bits mono a self.sample_rate."""
++
++        return b"".join(
++            chunk.audio_int16_bytes
++            for chunk in self._voice.synthesize(text)
++        )
++
++
++# =========================================================
++# TEXTO PARA HABLAR
++#
++# El LLM a veces contesta con Markdown, listas o PID. Piper los
++# leería tal cual ("asterisco asterisco..."), y una respuesta larga
++# tarda decenas de segundos en decirse.
++# =========================================================
++
++MAX_SPEECH_CHARS = 280
++
++
++def to_speech_text(text, limit=MAX_SPEECH_CHARS):
++
++    text = str(text or "")
++
++    # Detalles técnicos entre paréntesis: (PID: 1234), (ID 5)...
++    text = re.sub(r"\((?:PID|pid|ID|id)\b[^)]*\)", "", text)
++
++    # Markdown: negrita, cursiva, código, títulos, citas. El "_"
++    # solo como énfasis: dentro de una palabra (media_controller) queda.
++    text = re.sub(r"[*`]+", "", text)
++    text = re.sub(r"(?<!\w)_+|_+(?!\w)", "", text)
++    text = re.sub(r"(?m)^\s*[#>]+\s*", "", text)
++
++    # Viñetas y numeración al principio de cada línea.
++    text = re.sub(r"(?m)^\s*(?:[-•]|\d+[.)])\s+", "", text)
++
++    # Cada línea es una frase: termina con punto si no tenía.
++    lines = [line.strip() for line in text.splitlines() if line.strip()]
++    text = " ".join(
++        line if line[-1] in ".!?:;," else f"{line}."
++        for line in lines
++    )
++    text = " ".join(text.split())
++
++    if len(text) <= limit:
++        return text
++
++    # Corta en la última oración completa que entra.
++    cut = text[:limit]
++    end = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
++
++    if end > limit // 3:
++        return cut[:end + 1]
++
++    return cut.rsplit(" ", 1)[0] + "..."
++
++
++# =========================================================
++# TEXTO PARA LA PANTALLA
++#
++# La fuente del ESP32 es ASCII: se sacan tildes y eñes.
++# =========================================================
++
++def to_display_text(text, limit=200):
++
++    normalized = unicodedata.normalize("NFKD", str(text or ""))
++    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
++    ascii_text = " ".join(ascii_text.split())
++
++    return ascii_text[:limit]
+diff --git a/mochi-desktop - V0.3/window_manager.py b/mochi-desktop - V0.3/window_manager.py
+index 02945c2..9059375 100644
+--- a/mochi-desktop - V0.3/window_manager.py	
++++ b/mochi-desktop - V0.3/window_manager.py	
+@@ -1,7 +1,14 @@
++import os
+ from difflib import SequenceMatcher
+ 
+-import win32con
+-import win32gui
++if os.name == "nt":
++    import win32con
++    import win32gui
++
++else:
++    # Linux: mismas funciones, implementadas sobre KWin.
++    from linux_platform import win32_compat as win32con
++    from linux_platform import win32_compat as win32gui
+ 
+ from discovery.windows import (
+     discover_windows,

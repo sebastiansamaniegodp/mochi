@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Mochi
+GenericName=Asistente por voz
+Comment=Hablale a Mochi: el robot ESP32 con el LLM de la PC
+Exec=mochi
+Icon=mochi
+Terminal=false
+Categories=Utility;
+Keywords=mochi;voz;llm;esp32;robot;
+StartupWMClass=mochi

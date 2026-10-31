@@ -1,0 +1,43 @@
+MOCHI v3.3.8 - AUDIO LIMPIO PARA PARLANTE PEQUENO
+
+OBJETIVO
+La v3.3.7 ya elimino los cortes, pero hay distorsion/aspereza.
+Esta version intenta mejorar SOLO el sonido en Windows, sin cambiar
+el protocolo PCM12, la frecuencia de 16 kHz ni el firmware ESP32.
+
+INSTALACION
+1. Conserva una copia funcional de Mochi v3.3.7 (programa y Arduino).
+2. NO vuelvas a cargar firmware: el archivo Arduino adjunto es el mismo de v3.3.7.
+3. Cierra totalmente Mochi v3.3.7 y extrae este ZIP en otra carpeta.
+4. Ejecuta Mochi_PC/Iniciar_Mochi.bat de esta nueva carpeta.
+5. Conecta al COM que ya funcionaba.
+6. Selecciona la salida realmente utilizada, preferiblemente AndroidTV
+   (NVIDIA High Definition Audio) (WASAPI alternativo), si esa es la que
+   reproduce tu contenido. Si el TV ya cambio de salida, selecciona la correcta.
+7. Elige 'Protegido (limpio)' y volumen 70%. Prueba musica dos minutos.
+8. Si aun raspa, prueba 'Protegido (antiraspado)' y 50-70%.
+9. Para comparar SIN tocar firmware, selecciona 'Directo (diagnostico)'
+   al mismo volumen. Si la distorsion aumenta en Directo y mejora en
+   Protegido, es compatible con exceso de graves/picos en el parlante.
+
+CAMBIOS
+- Dos nuevos perfiles SIN realce artificial de graves ni aumento de nivel.
+- Filtro pasa-altos Butterworth a 220 o 320 Hz y pasa-bajos a 5.7 o 5.2 kHz;
+  diseno para parlante pequeno, recorta graves que lo hacen vibrar o saturar.
+- Techo de ganancia conservador y proteccion digital contra picos.
+- Redondeo y dither TPDF de muy bajo nivel al convertir a PCM12;
+  mantiene 480 bytes/bloque y silencio exactamente cero.
+- Diagnostico cada 15 s del pico HDMI y muestras cerca de 0 dBFS;
+  no confirma recorte analogico, pero ayuda a detectar una fuente saturada.
+- Frecuencia, codigo de captura WASAPI, colas USB y firmware IGUALES a 3.3.7.
+
+LIMITACIONES
+- Si el parlante o amplificador saturan fisicamente, el software solo
+  puede reducir graves/energia y volumen. No aumenta potencia disponible.
+- Mantiene MONO 16 kHz PCM12: una siguiente mejora de fidelidad puede
+  aumentar la calidad solo DESPUES de mantener la estabilidad.
+- No probada en el ESP32 real; Python probado con audio sintetico.
+
+IMPORTANTE: los controles >100% en perfiles tradicionales aun pueden
+provocar distorsion; con perfiles Protegido se limita el rango efectivo.
+Si escuchas crujidos fuertes, baja el nivel o detén la reproducción.

@@ -1,0 +1,8 @@
+{
+  "wake_words": ["mochi", "moche", "mochis", "moci", "muchi", "mochila"],
+  "wake_phrases": ["hola noche", "hola mucho"],
+  "wake_window_seconds": 5,
+  "baudrate": 921600,
+  "sample_rate": 16000,
+  "stereo": false
+}

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3a42"/>
+      <stop offset="1" stop-color="#162127"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0f1a1f"/>
+      <stop offset="1" stop-color="#081014"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+  <rect x="16" y="24" width="224" height="208" rx="56" fill="url(#body)"/>
+  <rect x="34" y="44" width="188" height="152" rx="40" fill="url(#screen)"/>
+  <g fill="#7fe7d3">
+    <g filter="url(#glow)" opacity="0.55">
+      <rect x="72" y="80" width="40" height="56" rx="14"/>
+      <rect x="144" y="80" width="40" height="56" rx="14"/>
+    </g>
+    <rect x="72" y="80" width="40" height="56" rx="14"/>
+    <rect x="144" y="80" width="40" height="56" rx="14"/>
+    <rect x="114" y="158" width="28" height="8" rx="4" opacity="0.85"/>
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+# Mochi Desktop en Linux (KDE Plasma / Wayland).
+# Además: requirements-voice.txt para el puente con el ESP32.
+#
+# Programas del sistema que usa (Debian 13 + KDE ya los trae):
+#   wpctl (PipeWire), wl-copy / wl-paste, spectacle, gtk-launch, xdg-open
+psutil==7.2.2
+jeepney==0.9.0
+yt-dlp==2026.8.19
+
+# Opcional: Whisper como alternativa a Vosk (--stt whisper).
+# faster-whisper==1.2.1

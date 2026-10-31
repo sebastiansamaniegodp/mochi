@@ -1,0 +1,11 @@
+#!/bin/bash
+# Arranque del AppImage de Mochi.
+#
+# -s -E: el Python de adentro no mira PYTHONPATH ni el site-packages del
+# usuario. No se exporta nada (LD_LIBRARY_PATH, PYTHONPATH...) para que los
+# programas que abre Mochi (Chrome, Dolphin, etc.) arranquen normales.
+
+HERE="$(dirname "$(readlink -f "$0")")"
+APPDIR="${APPDIR:-$HERE}"
+
+exec "$APPDIR/opt/python3.13/bin/python3.13" -s -E -m mochi_app "$@"
