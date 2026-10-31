@@ -245,5 +245,4 @@ El firmware viejo del puente (0.1, PlatformIO, pines de la Fase 3) ya no existe.
 
 ## Pendiente
 
-- Palabra de activación ("Mochi, …" con texto libre) para el LLM, sin botón.
 - Probar Vosk y Whisper con el micrófono real y elegir uno.
