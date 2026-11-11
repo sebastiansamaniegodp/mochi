@@ -1,4 +1,5 @@
 import json
+import os
 
 from brain.tool_registry import (
     ToolRegistry
@@ -723,6 +724,28 @@ def get_system_info():
 
 
 # =========================================================
+# TOOL: COMANDO DE TERMINAL (SOLO LECTURA)
+# =========================================================
+
+def run_command(
+    command
+):
+
+    if os.name == "nt":
+
+        return {
+            "ok": False,
+            "message": "La terminal de solo lectura solo está disponible en Linux.",
+        }
+
+    from linux_platform.shell import run_readonly_command
+
+    return run_readonly_command(
+        command
+    )
+
+
+# =========================================================
 # TOOL: ABRIR APLICACIÓN
 # =========================================================
 
@@ -1245,7 +1268,7 @@ def create_mochi_tool_registry():
         name="set_system_volume",
 
         description=(
-            "Establece el volumen maestro de Windows "
+            "Establece el volumen maestro del sistema "
             "a un porcentaje exacto entre 0 y 100. "
             "Usar esta herramienta cuando el usuario "
             "quiera poner, dejar o ajustar el volumen, "
@@ -1293,7 +1316,7 @@ def create_mochi_tool_registry():
 
         description=(
             "Obtiene el porcentaje actual del volumen "
-            "maestro de Windows. "
+            "maestro del sistema. "
             "Usar cuando sea necesario conocer el volumen "
             "actual antes de decidir qué acción realizar."
         ),
@@ -1319,7 +1342,7 @@ def create_mochi_tool_registry():
         name="control_media",
 
         description=(
-            "Controla la sesión multimedia activa de Windows de forma "
+            "Controla la sesión multimedia activa del sistema de forma "
             "genérica, por ejemplo Netflix, YouTube, Twitch o un reproductor. "
             "get_state consulta su estado; play y pause solicitan un estado "
             "explícito y lo verifican. play_pause sólo envía una alternancia "
@@ -1378,7 +1401,7 @@ def create_mochi_tool_registry():
 
                     "description": (
                         "Título de la página activa usado para impedir que "
-                        "Windows controle otra sesión multimedia."
+                        "el sistema controle otra sesión multimedia."
                     )
                 }
             },
@@ -1398,25 +1421,25 @@ def create_mochi_tool_registry():
 
     registry.register(
         name="read_clipboard",
-        description="Lee texto del portapapeles de Windows. Usar solo cuando el usuario pidió explícitamente ver o conocer su contenido, porque puede contener información privada.",
+        description="Lee texto del portapapeles del sistema. Usar solo cuando el usuario pidió explícitamente ver o conocer su contenido, porque puede contener información privada.",
         parameters={"type": "object", "properties": {}},
         handler=read_clipboard,
     )
     registry.register(
         name="write_clipboard",
-        description="Copia texto al portapapeles de Windows. Usar solo cuando el usuario proporcionó o confirmó explícitamente el texto que quiere copiar.",
+        description="Copia texto al portapapeles del sistema. Usar solo cuando el usuario proporcionó o confirmó explícitamente el texto que quiere copiar.",
         parameters={"type": "object", "properties": {"text": {"type": "string", "description": "Texto exacto que se debe copiar."}}, "required": ["text"]},
         handler=write_clipboard,
     )
     registry.register(
         name="capture_screenshot",
-        description="Captura todas las pantallas visibles de Windows y guarda un PNG local. Usar solo si el usuario pidió explícitamente una captura; no interpreta su contenido.",
+        description="Captura todas las pantallas visibles del sistema y guarda un PNG local. Usar solo si el usuario pidió explícitamente una captura; no interpreta su contenido.",
         parameters={"type": "object", "properties": {"name": {"type": "string", "description": "Nombre opcional del archivo PNG, sin ruta."}}},
         handler=capture_screenshot,
     )
     registry.register(
         name="show_notification",
-        description="Envía una notificación no bloqueante a Windows. Usar solo cuando el usuario pidió explícitamente mostrar un aviso; el envío no confirma que Windows la haya mostrado, porque puede estar silenciada.",
+        description="Envía una notificación no bloqueante al sistema. Usar solo cuando el usuario pidió explícitamente mostrar un aviso; el envío no confirma que el sistema la haya mostrado, porque puede estar silenciada.",
         parameters={"type": "object", "properties": {"title": {"type": "string", "description": "Título breve del aviso."}, "message": {"type": "string", "description": "Texto breve del aviso."}}, "required": ["title", "message"]},
         handler=show_notification,
     )
@@ -1470,7 +1493,7 @@ def create_mochi_tool_registry():
     )
     registry.register(
         name="list_installed_applications",
-        description="Lista aplicaciones instaladas detectadas en Windows. La detección se realiza solo al usar esta herramienta o al abrir una aplicación.",
+        description="Lista aplicaciones instaladas detectadas en el sistema. La detección se realiza solo al usar esta herramienta o al abrir una aplicación.",
         parameters={"type": "object", "properties": {"query": {"type": "string", "description": "Filtro opcional por nombre."}, "limit": {"type": "integer", "description": "Máximo de resultados, entre 1 y 100; por defecto 25."}}},
         handler=list_installed_applications,
     )
@@ -1494,9 +1517,15 @@ def create_mochi_tool_registry():
     )
     registry.register(
         name="get_system_info",
-        description="Obtiene información local de hardware y sistema operativo: CPU, RAM, GPU, Windows y perfil recomendado de Mochi. No modifica el equipo.",
+        description="Obtiene información local de hardware y sistema operativo: CPU, RAM, GPU y perfil recomendado de Mochi. No modifica el equipo.",
         parameters={"type": "object", "properties": {}},
         handler=get_system_info,
+    )
+    registry.register(
+        name="run_command",
+        description="Ejecuta en la terminal de esta computadora un comando de solo lectura y devuelve su salida. Sirve para consultar el estado real del sistema: puertos ocupados (ss -ltnp), procesos (ps, pgrep), disco (df -h, du), memoria (free -h), red (ip a, ping), servicios (systemctl status), registros (journalctl), paquetes (dpkg -l, apt list) y archivos (ls, cat, head, tail, find, grep). Se pueden unir comandos con '|'. No modifica nada: no hay sudo, redirecciones, ';' ni '&&', y los comandos que escriben o borran se rechazan.",
+        parameters={"type": "object", "properties": {"command": {"type": "string", "description": "Comando a ejecutar, por ejemplo: ss -ltnp | grep :8080"}}, "required": ["command"]},
+        handler=run_command,
     )
 
 
@@ -1513,7 +1542,7 @@ def create_mochi_tool_registry():
         name="open_application",
 
         description=(
-            "Busca y abre una aplicación instalada en Windows. "
+            "Busca y abre una aplicación instalada en el sistema. "
             "Usar cuando el usuario quiera abrir, iniciar, "
             "ejecutar un programa instalado localmente. No usar para "
             "sitios web, dominios o servicios como Netflix o YouTube; "
@@ -1610,7 +1639,7 @@ def create_mochi_tool_registry():
 
         description=(
             "Obtiene las ventanas visibles que están abiertas "
-            "actualmente en Windows. "
+            "actualmente en el sistema. "
             "Devuelve el título de cada ventana, su proceso y PID. "
             "Usar cuando el usuario pregunte qué programas o "
             "ventanas tiene abiertas, o cuando sea necesario "
@@ -1635,7 +1664,7 @@ def create_mochi_tool_registry():
         name="close_window",
 
         description=(
-            "Cierra normalmente una ventana abierta de Windows. "
+            "Cierra normalmente una ventana abierta del sistema. "
             "Usar cuando el usuario quiera cerrar una aplicación "
             "o ventana que actualmente esté abierta. "
             "No fuerza la terminación del proceso."
@@ -1723,7 +1752,7 @@ def create_mochi_tool_registry():
         name="control_window",
 
         description=(
-            "Controla una ventana abierta de Windows. "
+            "Controla una ventana abierta del sistema. "
             "Permite traerla al frente, minimizarla o maximizarla. "
             "Usar cuando el usuario diga cosas como "
             "'traé Chrome al frente', 'mostrame Discord', "
@@ -1938,7 +1967,7 @@ if __name__ == "__main__":
 
             "content":
                 (
-                    "Sos Mochi, un asistente de Windows. "
+                    "Sos Mochi, un asistente de escritorio. "
                     "Comprendé la intención del usuario. "
                     "Cuando una herramienta pueda realizar "
                     "la acción solicitada, utilizala. "

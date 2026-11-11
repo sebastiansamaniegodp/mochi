@@ -1,4 +1,6 @@
 import json
+import os
+import platform
 import re
 import sys
 import time
@@ -29,12 +31,65 @@ from brain.pending_page_choice import PendingPageChoiceCache
 
 
 # =========================================================
+# SISTEMA OPERATIVO REAL
+#
+# Se le dice al modelo en qué sistema corre, para que no
+# asuma Windows. El texto no cambia mientras la app está
+# abierta: no rompe la caché del LLM.
+# =========================================================
+
+def describe_operating_system():
+
+    system = platform.system() or "desconocido"
+
+    name = system
+
+    if system == "Linux":
+
+        try:
+
+            name = (
+                platform.freedesktop_os_release()
+                .get("PRETTY_NAME")
+                or "Linux"
+            )
+
+            if "linux" not in name.lower():
+
+                name = f"Linux ({name})"
+
+        except OSError:
+
+            name = "Linux"
+
+        desktop = os.environ.get(
+            "XDG_CURRENT_DESKTOP",
+            ""
+        ).strip()
+
+        if desktop:
+
+            name = f"{name}, escritorio {desktop}"
+
+    elif system == "Windows":
+
+        name = f"Windows {platform.release()}"
+
+    return (
+        f"El sistema operativo de esta computadora es {name}. "
+        "No asumas otro sistema operativo ni des instrucciones "
+        "para otro. "
+    )
+
+
+# =========================================================
 # SYSTEM PROMPT DEL AGENTE
 # =========================================================
 
 AGENT_SYSTEM_PROMPT = (
     "Sos Mochi, un asistente que controla una computadora "
     "mediante herramientas estructuradas. "
+    + describe_operating_system() +
     "Estás funcionando dentro de un agent loop, por lo que "
     "podés usar una herramienta, observar su resultado y "
     "continuar trabajando hasta completar la petición. "
@@ -92,7 +147,7 @@ AGENT_SYSTEM_PROMPT = (
     "unidad publicada por el control sea inequívoca; no adivines una duración. "
     "Para siguiente/anterior usá un botón accesible exacto si existe; como "
     "alternativa global podés enviar control_media next/previous, aclarando "
-    "que Windows aceptó la señal pero sin afirmar el estado final. "
+    "que el sistema aceptó la señal pero sin afirmar el estado final. "
     "Cuando el usuario nombre un autor o canal y además un video o resultado "
     "concreto, el video es el destino y el autor es una restricción: buscá "
     "ambos juntos, no trates al canal ni a un botón Search como resultado. "
@@ -113,12 +168,20 @@ AGENT_SYSTEM_PROMPT = (
     "un video, una película o una serie) usá play_web_media aunque el pedido "
     "sea vago; si no dijo el sitio, YouTube. "
     "Para pausar, reanudar, pasar, retroceder o detener contenido multimedia "
-    "usá control_media: funciona sobre la sesión multimedia activa de Windows, "
+    "usá control_media: funciona sobre la sesión multimedia activa del sistema, "
     "sin depender de Netflix, YouTube o Twitch. play_pause es una señal de "
     "alternar, así que no afirmes que el reproductor quedó pausado o reanudado "
     "si no existe evidencia adicional. Para subir o bajar un poco el volumen "
     "usá control_media con volume_up o volume_down; para un porcentaje exacto "
-    "usá set_system_volume."
+    "usá set_system_volume. "
+    "Para revisar o averiguar algo del sistema (si un puerto está ocupado, "
+    "qué procesos corren, espacio en disco, memoria, red, servicios, "
+    "registros, paquetes instalados o el contenido de un archivo) usá "
+    "run_command con un comando de solo lectura de este sistema operativo "
+    "y respondé con lo que devolvió; no digas que no podés ni le pidas al "
+    "usuario que lo haga él. run_command no modifica nada: si el usuario "
+    "pide cambiar, instalar o borrar algo por terminal, decile que por "
+    "ahora solo podés consultar."
 )
 
 
@@ -3582,7 +3645,7 @@ class MochiAgentLoop:
                     ending = "" if str(game).endswith((".", "!", "?")) else "."
                     return f"Envié a {launcher.capitalize()} la orden de iniciar {game}{ending}"
             if resolution == "application" and tool_result.get("application"):
-                return f"Envié a Windows la orden de abrir {tool_result['application']}."
+                return f"Envié al sistema la orden de abrir {tool_result['application']}."
             if resolution == "web":
                 return f"Listo, abrí {tool_result.get('resolved_target') or 'el destino solicitado'}."
 
@@ -3979,7 +4042,7 @@ class MochiAgentLoop:
         if local_file_search_step and local_file_search_step.status == "completed":
             return fallback_text or f"Completé la búsqueda local de {local_file_search_step.target}."
         if local_open_step and local_open_step.status == "completed":
-            return f"Envié a Windows la orden de abrir {local_open_step.target}."
+            return f"Envié al sistema la orden de abrir {local_open_step.target}."
         if open_step and open_step.status == "completed" and page_search_step:
             return (
                 f"Abrí {goal_state.target}, pero la página todavía no expuso "
@@ -4340,7 +4403,7 @@ class MochiAgentLoop:
                 and last_result.get("state_confirmed") is False
             ):
                 fallback = (
-                    f"{fallback} La orden fue enviada, pero Windows no expone "
+                    f"{fallback} La orden fue enviada, pero el sistema no expone "
                     "evidencia suficiente para confirmar el estado final."
                 ).strip()
             final_goal = self._final_goal_result(goal_state, fallback)
