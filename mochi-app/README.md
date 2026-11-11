@@ -25,6 +25,7 @@ La primera vez: menú → **Configuración** → dirección y clave del servidor
 | Órdenes fijas | «Mochi, duerme», «Mochi, feliz»… (solo con la placa) |
 | Escribir | el cuadro de abajo y Enter |
 | Memoria | recuerda la conversación (se le pueden pedir cosas seguidas: «abrí YouTube», «ahora poné música»). Al llegar al 80 % del contexto resume lo más viejo; después de media hora sin hablarle se olvida. **Nuevo chat** (arriba, o Ctrl+N) para empezar de cero |
+| Memoria permanente | una bóveda de [Obsidian](https://obsidian.md) en `ROBOTICA/boveda` (otra carpeta: `"vault_path"` en `~/.mochi/config.json`). «Acordate de que…» guarda el dato en `Mochi/Recuerdos.md`, que Mochi tiene presente en todas las conversaciones aunque se cierre la app. Cada orden y su respuesta quedan en `Conversaciones/AAAA-MM-DD.md`: «¿qué te pedí ayer?» las busca, igual que cualquier nota que escribas ahí. Son archivos de texto: se corrigen o borran a mano o con Obsidian (*Abrir carpeta como bóveda*); Obsidian no hace falta para que funcione |
 | Indicador **LLM** | verde: listo; rojo: no responde (se reintenta solo cada 30 s). Si se reinicia llama-server: menú → **Precalentar el LLM** |
 | Pestaña **Placa** | puerto, nivel del micrófono de Mochi, órdenes fijas con botones |
 | Pestaña **Parlante PC** | el audio de la PC sale por Mochi (salida «Mochi» del sonido de KDE) |

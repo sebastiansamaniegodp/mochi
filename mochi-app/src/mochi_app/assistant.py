@@ -17,6 +17,7 @@ Además de los eventos que ya mandaba el puente, le avisa a la ventana:
 """
 
 import json
+import queue
 import threading
 import time
 import traceback
@@ -35,6 +36,7 @@ from mochi_app.voice.speech import (
     SpeechToText,
     TextToSpeech,
     WhisperSpeechToText,
+    speech_parts,
     to_speech_text,
 )
 
@@ -104,6 +106,25 @@ def llm_configured():
 
 
 # =========================================================
+# MEMORIA PERMANENTE (agente/vault_memory.py)
+#
+# Una bóveda de Obsidian: por defecto la carpeta «boveda»
+# al lado de mochi-app. Se cambia con "vault_path" en
+# ~/.mochi/config.json.
+# =========================================================
+
+def vault_path():
+
+    try:
+        config = json.loads((Path.home() / ".mochi" / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        config = {}
+
+    configured = str(config.get("vault_path") or "").strip()
+    return Path(configured).expanduser() if configured else paths.default_vault()
+
+
+# =========================================================
 # PRECALENTAR LA CACHÉ DEL LLM
 # =========================================================
 
@@ -114,7 +135,8 @@ def warm_up_llm(command_service):
     tarda ~80 s en la RX 580. Devuelve (ok, texto).
 
     Si hay una conversación (después de compactarla), va también:
-    así la orden siguiente no tiene que procesarla.
+    así la orden siguiente no tiene que procesarla. Lo mismo los
+    recuerdos de la memoria permanente, que van siempre.
     """
 
     from brain.agent_loop import AGENT_SYSTEM_PROMPT
@@ -152,9 +174,13 @@ def warm_up_llm(command_service):
         print(f"[llm] listo ({seconds:.1f} s)")
 
         # Lo que mide llama-server, para saber cuándo compactar.
-        if not history:
+        # (Sin conversación: solo el sistema, las tools y los recuerdos.)
+        if memory.empty:
             usage = (result.raw or {}).get("usage") or {}
-            memory.base_tokens = usage.get("prompt_tokens") or memory.base_tokens
+            measured = usage.get("prompt_tokens")
+
+            if measured:
+                memory.base_tokens = max(1, measured - memory.pinned_tokens())
 
         context_size = getattr(router.provider, "context_size", None)
         context_size = context_size() if context_size else None
@@ -264,6 +290,21 @@ class Assistant:
             return self._not_configured
 
         self._command_service = command_service
+
+        # La bóveda de Obsidian: lo que Mochi recuerda siempre.
+        # Antes de precalentar, porque los recuerdos van en el prompt.
+        try:
+            import vault_memory
+
+            vault = vault_memory.activate(vault_path())
+            command_service.memory.refresh_pinned()
+            self.post("log", (
+                f"Memoria permanente: {len(vault.memories())} recuerdos "
+                f"en {vault.path} (se puede abrir con Obsidian)."
+            ))
+        except Exception as error:
+            traceback.print_exc()
+            self.post("log", f"Sin memoria permanente ({error}).")
 
         threading.Thread(target=self._keep_warm, daemon=True).start()
         threading.Thread(target=self._watch_memory, daemon=True).start()
@@ -502,18 +543,56 @@ class Assistant:
         if not text or self.tts is None or not self.speak_replies:
             return
 
-        speech = to_speech_text(text)
+        parts = speech_parts(text)
 
-        if not speech:
+        if not parts:
             return
 
-        audio = self.tts.synthesize(speech)
+        # La respuesta se dice entera, por tramos: mientras suena uno,
+        # Piper sintetiza el siguiente en otro hilo.
+        ready = queue.Queue(maxsize=1)
+        stop = threading.Event()
 
-        # Se canceló mientras Piper sintetizaba.
-        if self.cancelled:
-            return
+        def synthesize():
 
-        (self.voice_on_pc or session).speak(audio, self.tts.sample_rate)
+            try:
+                for part in parts:
+                    audio = self.tts.synthesize(part)
+
+                    while not stop.is_set():
+                        try:
+                            ready.put(audio, timeout=0.2)
+                            break
+                        except queue.Full:
+                            pass
+
+                    if stop.is_set():
+                        return
+            except Exception:
+                traceback.print_exc()
+            finally:
+                # Fin de la voz (el hueco lo deja libre quien escucha).
+                while not stop.is_set():
+                    try:
+                        ready.put(None, timeout=0.2)
+                        break
+                    except queue.Full:
+                        pass
+
+        threading.Thread(target=synthesize, daemon=True).start()
+        speaker = self.voice_on_pc or session
+
+        try:
+            while True:
+                audio = ready.get()
+
+                # Se canceló mientras Piper sintetizaba o mientras sonaba.
+                if audio is None or self.cancelled:
+                    return
+
+                speaker.speak(audio, self.tts.sample_rate)
+        finally:
+            stop.set()
 
 
     def _handle_utterance(self, session, pcm, rate):

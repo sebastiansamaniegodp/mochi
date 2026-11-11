@@ -32,6 +32,22 @@ CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "
 LOG_FILE = CACHE_DIR / "mochi.log"
 
 
+def default_vault():
+    """
+    La bóveda de Obsidian con la memoria permanente de Mochi
+    (agente/vault_memory.py): la carpeta «boveda» al lado de
+    mochi-app. Si el AppImage se llevó a otro lado, ~/.mochi/boveda.
+    """
+
+    # mochi-app/dist/Mochi-x86_64.AppImage, o mochi-app/ desde el código.
+    app_dir = Path(APPIMAGE).resolve().parent.parent if APPIMAGE else APP_DIR
+
+    if app_dir.name == "mochi-app":
+        return app_dir.parent / "boveda"
+
+    return Path.home() / ".mochi" / "boveda"
+
+
 def enable_agent_imports():
     """El agente importa sus módulos como de primer nivel (brain, actions...)."""
 

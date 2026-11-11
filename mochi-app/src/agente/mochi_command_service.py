@@ -2,6 +2,7 @@ import threading
 import traceback
 
 import cancellation
+import vault_memory
 from brain.agent_loop import (
     AGENT_SYSTEM_PROMPT,
     agent_loop,
@@ -24,6 +25,7 @@ class MochiCommandService:
     - el estado persistente que mantenga AgentLoop (por ejemplo, una
       selección pendiente) y las sesiones de las herramientas;
     - la memoria de la conversación (conversation_memory);
+    - la memoria permanente, si la app activó la bóveda (vault_memory);
     - las instancias persistentes de browser_tools.
 
     Todas las fuentes de comandos deberían terminar entrando aquí:
@@ -48,7 +50,10 @@ class MochiCommandService:
 
         # Las órdenes anteriores y sus respuestas: se mandan
         # con cada orden. Se cambia solo con el lock tomado.
-        self.memory = ConversationMemory()
+        # Empieza con los recuerdos de la bóveda, si hay una.
+        self.memory = ConversationMemory(
+            pinned_source=vault_memory.pinned_text,
+        )
 
 
     @staticmethod
@@ -154,6 +159,15 @@ class MochiCommandService:
                     user_message_content(command, reply_hint),
                     self._clean_text(result.get("text")),
                 )
+
+                # Queda anotado en la bóveda (la nota del día).
+                vault = vault_memory.active()
+
+                if vault is not None:
+                    vault.log_turn(
+                        command,
+                        self._clean_text(result.get("text")),
+                    )
 
         except cancellation.CommandCancelled:
 

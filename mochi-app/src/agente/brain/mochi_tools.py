@@ -1,6 +1,8 @@
 import json
 import os
 
+import vault_memory
+
 from brain.tool_registry import (
     ToolRegistry
 )
@@ -397,6 +399,57 @@ def show_notification(title, message):
         "ok": bool(success),
         "message": str(result_message),
         "state_confirmed": False,
+    }
+
+
+# =========================================================
+# TOOLS: MEMORIA PERMANENTE (vault_memory, bóveda de Obsidian)
+# =========================================================
+
+def remember(text):
+
+    vault = vault_memory.active()
+
+    if vault is None:
+        return {
+            "ok": False,
+            "message": "La memoria permanente no está disponible.",
+        }
+
+    success, message = vault.remember(text)
+
+    return {
+        "ok": bool(success),
+        "message": message,
+    }
+
+
+def search_memory(query):
+
+    vault = vault_memory.active()
+
+    if vault is None:
+        return {
+            "ok": False,
+            "message": "La memoria permanente no está disponible.",
+        }
+
+    results = vault.search(query)
+
+    if not results:
+        return {
+            "ok": True,
+            "results": [],
+            "message": (
+                "No hay nada guardado sobre eso. Decile al usuario "
+                "que no lo tenés anotado; no lo inventes."
+            ),
+        }
+
+    return {
+        "ok": True,
+        "results": results,
+        "message": f"{len(results)} fragmentos encontrados en la memoria.",
     }
 
 
@@ -1526,6 +1579,24 @@ def create_mochi_tool_registry():
         description="Ejecuta en la terminal de esta computadora un comando de solo lectura y devuelve su salida. Sirve para consultar el estado real del sistema: puertos ocupados (ss -ltnp), procesos (ps, pgrep), disco (df -h, du), memoria (free -h), red (ip a, ping), servicios (systemctl status), registros (journalctl), paquetes (dpkg -l, apt list) y archivos (ls, cat, head, tail, find, grep). Se pueden unir comandos con '|'. No modifica nada: no hay sudo, redirecciones, ';' ni '&&', y los comandos que escriben o borran se rechazan.",
         parameters={"type": "object", "properties": {"command": {"type": "string", "description": "Comando a ejecutar, por ejemplo: ss -ltnp | grep :8080"}}, "required": ["command"]},
         handler=run_command,
+    )
+
+
+    # =====================================================
+    # MEMORIA PERMANENTE
+    # =====================================================
+
+    registry.register(
+        name="remember",
+        description="Guarda un dato en tu memoria permanente, que se conserva entre conversaciones y aunque se cierre Mochi. Usala cuando el usuario pida que recuerdes o anotes algo, o cuando cuente un dato estable sobre él que sirva más adelante: su nombre, gustos, preferencias, personas, rutinas, proyectos. No guardes órdenes del momento ni el estado de la computadora.",
+        parameters={"type": "object", "properties": {"text": {"type": "string", "description": "El dato en una oración completa que se entienda sola, por ejemplo: Al usuario le gusta el rock nacional."}}, "required": ["text"]},
+        handler=remember,
+    )
+    registry.register(
+        name="search_memory",
+        description="Busca en tu memoria permanente: los datos guardados, lo hablado en conversaciones de días anteriores (con su fecha) y las notas del usuario. Usala cuando pregunte por algo que te dijo o te pidió antes y que no está en esta conversación, o por algo que tenga anotado.",
+        parameters={"type": "object", "properties": {"query": {"type": "string", "description": "Palabras clave de lo que se busca, por ejemplo: cumpleaños mamá."}}, "required": ["query"]},
+        handler=search_memory,
     )
 
 

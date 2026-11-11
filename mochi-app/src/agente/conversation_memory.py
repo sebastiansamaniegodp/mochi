@@ -25,6 +25,13 @@ import time
 #   viejas se reemplazan por un resumen que escribe el LLM.
 #   Quedan enteras las últimas KEEP_TURNS;
 # - olvidar: después de media hora sin órdenes.
+#
+# Memoria permanente (vault_memory): los recuerdos de la
+# bóveda van primero, antes del resumen. Se leen al empezar
+# la conversación y al compactar, no en cada orden: si
+# cambiaran en el medio, cambiaría el comienzo y se
+# perdería la caché. Lo que se guarda durante una
+# conversación ya está en su historial.
 # =========================================================
 
 # Compactar cuando la conversación ocupa esta parte del
@@ -61,6 +68,8 @@ SUMMARY_PREFIX = (
 
 SUMMARY_REPLY = "Entendido."
 
+PINNED_REPLY = "Entendido, lo tengo presente."
+
 # Se manda con el mismo sistema, las mismas tools y el
 # mismo historial que una orden: así usa la caché.
 SUMMARY_REQUEST = (
@@ -83,10 +92,14 @@ def estimate_tokens(text):
 
 class ConversationMemory:
 
-    def __init__(self):
+    def __init__(self, pinned_source=None):
 
         self.base_tokens = DEFAULT_BASE_TOKENS
         self.context_size = DEFAULT_CONTEXT_SIZE
+
+        # Devuelve los recuerdos permanentes ("" si no hay).
+        self._pinned_source = pinned_source
+        self._pinned = ""
 
         self._summary = ""
 
@@ -96,6 +109,47 @@ class ConversationMemory:
         # Cuándo llegó la última orden (para olvidar).
         self._last = None
         self._lock = threading.Lock()
+
+        self.refresh_pinned()
+
+
+    # =====================================================
+    # MEMORIA PERMANENTE
+    # =====================================================
+
+    def refresh_pinned(self):
+        """
+        Vuelve a leer los recuerdos permanentes. Devuelve
+        True si cambiaron (hay que precalentar otra vez).
+        """
+
+        pinned = self._pinned_source() if self._pinned_source else ""
+
+        with self._lock:
+            changed = pinned != self._pinned
+            self._pinned = pinned
+
+        return changed
+
+
+    def pinned_tokens(self):
+
+        with self._lock:
+            return sum(
+                estimate_tokens(message["content"])
+                for message in self._pinned_messages()
+            )
+
+
+    def _pinned_messages(self):
+
+        if not self._pinned:
+            return []
+
+        return [
+            {"role": "user", "content": self._pinned},
+            {"role": "assistant", "content": PINNED_REPLY},
+        ]
 
 
     # =====================================================
@@ -109,10 +163,9 @@ class ConversationMemory:
             return self._messages(self._summary, self._turns)
 
 
-    @staticmethod
-    def _messages(summary, turns):
+    def _messages(self, summary, turns):
 
-        history = []
+        history = self._pinned_messages()
 
         if summary:
             history.append({
@@ -203,6 +256,9 @@ class ConversationMemory:
             self._turns = []
             self._last = None
 
+        # Conversación nueva: con los recuerdos al día.
+        self.refresh_pinned()
+
 
     def shrink(self):
         """Se llenó el contexto en medio de una orden: queda solo la última."""
@@ -256,3 +312,6 @@ class ConversationMemory:
         with self._lock:
             self._summary = summary or previous_summary
             self._turns = self._turns[len(old):]
+
+        # Ya cambió el comienzo: de paso, los recuerdos nuevos.
+        self.refresh_pinned()

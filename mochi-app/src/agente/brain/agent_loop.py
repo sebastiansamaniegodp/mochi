@@ -181,7 +181,14 @@ AGENT_SYSTEM_PROMPT = (
     "y respondé con lo que devolvió; no digas que no podés ni le pidas al "
     "usuario que lo haga él. run_command no modifica nada: si el usuario "
     "pide cambiar, instalar o borrar algo por terminal, decile que por "
-    "ahora solo podés consultar."
+    "ahora solo podés consultar. "
+    "Tenés memoria permanente: si el usuario te pide que recuerdes algo o "
+    "te cuenta un dato estable sobre él, guardalo con remember. Lo que "
+    "hablaron otros días no está a la vista pero quedó anotado: si pregunta "
+    "por algo que te dijo, te pidió o hicieron antes (la otra vez, ayer, "
+    "el otro día) y no está en esta conversación, usá siempre search_memory "
+    "con palabras clave antes de contestar; nunca digas que no tenés "
+    "registro sin haber buscado."
 )
 
 

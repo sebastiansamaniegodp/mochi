@@ -6,6 +6,7 @@ llm-server/api_key.txt
 CLAUDE.md
 Mochi.desktop
 .claude/
+boveda/
 
 # ====================================================
 # Entornos de Python (se reinstalan con requirements.txt)
